@@ -1191,19 +1191,29 @@ function ghRefresh(){if(S.gh.token){ghLoadUser();ghLoadRepos();}}
 async function ghDisconnect(){if(!await askConfirm('Disconnect GitHub account?','Disconnect'))return;S.gh.token='';S.ghUser=null;S.ghRepos=[];document.getElementById('gh-not-connected').classList.remove('hidden');document.getElementById('gh-connected').classList.add('hidden');document.getElementById('gh-status-text').textContent='GitHub: Not connected';persist();closeModal('github-modal');}
 
 // ══ WEBLLM ════════════════════════════════════════════════════════════
-let webllmEngine=null, webllmLoading=false, webllmLoadedModel=null;
+let webllmEngine=null, webllmLoading=false, webllmLoadedModel=null, webllmCtxWin=null;
+// Mobile browsers (especially iOS Safari) hard-kill the tab when the WebGPU
+// KV cache + weights exceed the tab memory budget, so cap the engine context.
+function isMobileDevice(){return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
 function shortModelName(id){ return (id||'').replace(/-instruct/i,'').replace(/-it$/i,'').replace(/-q[0-9][^-]*(-MLC)?((-[0-9]+k))?$/i,'').replace(/-MLC$/i,''); }
 function webllmAvailable(){return typeof navigator!=='undefined'&&!!navigator.gpu;}
 async function testWebLLM(){const res=document.getElementById('webllm-test-result');if(webllmAvailable()){res.textContent='✓ WebGPU available';res.style.color='var(--green)';document.getElementById('webllm-dot').style.background='var(--green)';}else{res.textContent='✗ WebGPU not available — use Chrome/Edge 113+ and enable WebGPU';res.style.color='var(--red)';document.getElementById('webllm-dot').style.background='var(--red)';}}
 async function ensureWebLLMReady(){if(!window.webllm){await new Promise(res=>{if(window.webllm)return res();window.addEventListener('webllm-ready',res,{once:true});setTimeout(res,8000);});}if(!window.webllm)throw new Error('WebLLM library failed to load (check your network connection)');if(!webllmAvailable())throw new Error('WebGPU is not available in this browser. Use Chrome or Edge 113+.');}
-async function loadWebLLMModel(modelId){modelId=modelId||document.getElementById('cfg-webllm-model')?.value||S.ai.webllmModel;if(webllmLoading)return;if(webllmEngine&&webllmLoadedModel===modelId)return webllmEngine;webllmLoading=true;const prog=document.getElementById('webllm-progress'),bar=document.getElementById('webllm-progress-bar'),txt=document.getElementById('webllm-progress-text');const res=document.getElementById('webllm-test-result');if(res){res.textContent='';}if(prog){prog.style.display='block';bar.style.width='0%';txt.textContent='Initializing...';}try{await ensureWebLLMReady();const initProgressCallback=(report)=>{const pct=Math.round((report.progress||0)*100);if(bar)bar.style.width=pct+'%';if(txt)txt.textContent=report.text||`Loading... ${pct}%`;if(document.getElementById('webllm-status-text'))document.getElementById('webllm-status-text').textContent=`Loading ${modelId}: ${pct}%`;};webllmEngine=await window.webllm.CreateMLCEngine(modelId,{initProgressCallback});webllmLoadedModel=modelId;if(txt)txt.textContent='✓ Model loaded and ready';if(bar)bar.style.width='100%';if(res){res.textContent='✓ Model ready';res.style.color='var(--green)';}document.getElementById('webllm-dot').style.background='var(--green)';return webllmEngine;}catch(e){if(txt)txt.textContent='Failed: '+e.message;if(res){res.textContent='✗ '+e.message;res.style.color='var(--red)';}webllmEngine=null;webllmLoadedModel=null;throw e;}finally{webllmLoading=false;}}
-async function callWebLLM(messages,sys){const modelId=S.ai.webllmModel;const engine=await loadWebLLMModel(modelId);let maxTok=S.ai.maxTokens;if(!Number.isFinite(maxTok)||maxTok<=0)maxTok=1024;const cap=/0\.[56]B|1\.[05]B|Phi-1_5|gemma-2-2b/i.test(modelId)?1024:(/1\.7B|3B|Phi-3\.5/i.test(modelId)?2048:4096);maxTok=Math.min(maxTok,cap);const reply=await engine.chat.completions.create({messages:[{role:'system',content:sys},...messages],temperature:S.ai.temperature,top_p:0.8,presence_penalty:0.5,max_tokens:maxTok,extra_body:{enable_thinking:false}});return reply.choices?.[0]?.message?.content||'';}
+async function loadWebLLMModel(modelId){modelId=modelId||document.getElementById('cfg-webllm-model')?.value||S.ai.webllmModel;if(webllmLoading)return;if(webllmEngine&&webllmLoadedModel===modelId)return webllmEngine;webllmLoading=true;const prog=document.getElementById('webllm-progress'),bar=document.getElementById('webllm-progress-bar'),txt=document.getElementById('webllm-progress-text');const res=document.getElementById('webllm-test-result');if(res){res.textContent='';}if(prog){prog.style.display='block';bar.style.width='0%';txt.textContent='Initializing...';}try{await ensureWebLLMReady();const initProgressCallback=(report)=>{const pct=Math.round((report.progress||0)*100);if(bar)bar.style.width=pct+'%';if(txt)txt.textContent=report.text||`Loading... ${pct}%`;if(document.getElementById('webllm-status-text'))document.getElementById('webllm-status-text').textContent=`Loading ${modelId}: ${pct}%`;};const wantedWin=S.ai.contextWindow||4096;const engineWin=Math.max(1024,Math.min(wantedWin,isMobileDevice()?2048:8192));webllmEngine=await window.webllm.CreateMLCEngine(modelId,{initProgressCallback},{context_window_size:engineWin});webllmCtxWin=engineWin;webllmLoadedModel=modelId;if(engineWin<wantedWin)aiMsg('system',`ℹ️ Engine context window capped at ${engineWin.toLocaleString()} tokens on this device to avoid browser memory kills (you asked for ${wantedWin.toLocaleString()}). History trimming uses the capped value.`);if(txt)txt.textContent='✓ Model loaded and ready';if(bar)bar.style.width='100%';if(res){res.textContent='✓ Model ready';res.style.color='var(--green)';}document.getElementById('webllm-dot').style.background='var(--green)';return webllmEngine;}catch(e){if(txt)txt.textContent='Failed: '+e.message;if(res){res.textContent='✗ '+e.message;res.style.color='var(--red)';}webllmEngine=null;webllmLoadedModel=null;throw e;}finally{webllmLoading=false;}}
+async function callWebLLM(messages,sys){const modelId=S.ai.webllmModel;const engine=await loadWebLLMModel(modelId);let maxTok=S.ai.maxTokens;if(!Number.isFinite(maxTok)||maxTok<=0)maxTok=1024;const cap=/0\.[56]B|1\.[05]B|Phi-1_5|gemma-2-2b/i.test(modelId)?1024:(/1\.7B|3B|Phi-3\.5/i.test(modelId)?2048:4096);maxTok=Math.min(maxTok,cap);if(webllmCtxWin)maxTok=Math.min(maxTok,Math.max(256,Math.floor(webllmCtxWin*0.4)));const reply=await engine.chat.completions.create({messages:[{role:'system',content:sys},...messages],temperature:S.ai.temperature,top_p:0.8,presence_penalty:0.5,max_tokens:maxTok,extra_body:{enable_thinking:false}});return reply.choices?.[0]?.message?.content||'';}
 
 // ══ TOKEN ESTIMATION & SLIDING CONTEXT WINDOW ════════════════════════════
 // Rough approximation: ~4 characters per token (GPT-style BPE tokenisation).
 // Good enough for budget management; exact counts vary by model/vocabulary.
 function estimateTokens(text){
   return Math.ceil((text||'').length/4);
+}
+
+// The window the conversation must actually fit in: the user-configured
+// budget, further capped by the loaded WebLLM engine's context window.
+function effectiveCtxWindow(){
+  const cfg=S.ai.contextWindow||4096;
+  return (S.ai.backend==='webllm'&&webllmCtxWin)?Math.min(cfg,webllmCtxWin):cfg;
 }
 
 /**
@@ -1227,7 +1237,7 @@ function estimateTokens(text){
  * Returns the trimmed messages array (never empty if input was non-empty).
  */
 function applyContextWindow(messages, sys){
-  const win = S.ai.contextWindow || 4096;
+  const win = effectiveCtxWindow();
 
   // Reserve a proportional chunk for the model's output; cap so budget > 0.
   const maxOut = Math.min(
@@ -1280,7 +1290,7 @@ function updateCtxTokenBar(){
   const histT = S.aiHistory.reduce((a,m) => a + estimateTokens(m.content) + 8, 0);
   const inputT= estimateTokens((document.getElementById('ai-input')||{}).value || '');
   const total = sysT + histT + inputT;
-  const win   = S.ai.contextWindow || 4096;
+  const win   = effectiveCtxWindow();
   const pct   = Math.min(100, Math.round(total / win * 100));
   const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--amber)' : 'var(--accent)';
 
@@ -1307,6 +1317,9 @@ function stripThink(t){
 // inlining big files we give the model line-oriented commands (@@READ,
 // @@REPLACE, ...) and run a bounded request→result loop in sendAIMessage.
 const AI_READ_MAX_LINES=120, AI_TOOL_MAX_STEPS=6, AI_INLINE_FILE_LIMIT=3000;
+// Fingerprint phrases from the tool instructions: if a reply contains them,
+// the model is echoing its prompt ("prompt bleed") rather than acting.
+const AI_ECHO_MARKS=['the exact existing text','overwrite those lines with the fenced','find where that text appears','end your reply with ONE command'];
 
 function buildToolsSystemNote(){
   const active=S.activeTab?`\nThe user's open file is "${S.activeTab}" — commands that omit the file name target it.`:'';
@@ -1489,20 +1502,27 @@ async function sendAIMessage(){
     // Agentic loop: the model may issue @@ tool commands to read / search /
     // edit project files chunk by chunk. Each result is fed back to it until
     // it produces a final answer (or the step budget runs out).
-    let r='',steps=0;
+    let r='',steps=0,bounces=0,lastReply=null;
     while(true){
       r=stripThink(await callAI(S.aiHistory,buildSys()));
       const tool=parseAIToolCall(r);
       // Tiny models sometimes parrot the file-block format with placeholder
-      // contents instead of doing the work — bounce those back as an error
-      // so the model gets another attempt instead of ending the turn.
+      // contents, or echo the tool instructions verbatim, instead of doing
+      // the work — bounce those back as an error so the model gets another
+      // attempt instead of ending the turn.
       const junk=!tool&&r.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
       const junkEmpty=!!(junk&&junk[2].replace(/[.…\s`]/g,'')==='');
-      if(!tool&&!junkEmpty)break;
+      const echoed=!tool&&!junkEmpty&&AI_ECHO_MARKS.some(p=>r.includes(p));
+      if(!tool&&!junkEmpty&&!echoed)break;
+      if(r===lastReply){aiMsg('system','⚠️ Model is repeating itself — stopping here.');break;}
+      lastReply=r;
+      if((junkEmpty||echoed)&&bounces>=2){aiMsg('system','⚠️ The model keeps echoing its instructions instead of acting — it is likely too small for this task. Try a larger model (tap the model badge).');break;}
       if(steps>=AI_TOOL_MAX_STEPS){aiMsg('system','⚠️ Tool step limit reached — answering with what was gathered so far.');break;}
-      steps++;
+      steps++;if(junkEmpty||echoed)bounces++;
       S.aiHistory.push({role:'assistant',content:r});
-      const res=tool?execAITool(tool):{note:'rejected empty file block — retrying',output:`ERROR: that file: block for "${junk[1].trim()}" had no real content — never repeat the format example. To change existing text, use @@EDIT with a SEARCH/REPLACE block containing the real text.`};
+      const res=tool?execAITool(tool)
+        :junkEmpty?{note:'rejected empty file block — retrying',output:`ERROR: that file: block for "${junk[1].trim()}" had no real content — never repeat the format example. To change existing text, use @@EDIT with a SEARCH/REPLACE block containing the real text.`}
+        :{note:'model echoed instructions — retrying',output:'ERROR: you repeated the instructions instead of doing the task. Do the task now: reply with ONE real command using actual text and file names from this project (for find-and-replace: @@EDIT, then a SEARCH block with the real text to change), or give the final answer.'};
       aiMsg('system','🔧 '+res.note);
       S.aiHistory.push({role:'user',content:'[tool result]\n'+res.output});
       updateCtxTokenBar();
