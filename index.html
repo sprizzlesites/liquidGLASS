@@ -80,7 +80,10 @@
   .tab-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0;}
   textarea#editor{width:100%;height:100%;background:var(--bg-0);color:var(--text-0);font-family:'Cascadia Code','Consolas','Courier New',monospace;font-size:13px;line-height:20px;border:none;outline:none;resize:none;padding:10px 16px 10px 56px;tab-size:2;white-space:pre;overflow-wrap:normal;overflow-x:auto;}
   #line-gutter{display:none;position:absolute;top:0;left:0;bottom:0;width:48px;background:var(--bg-1);border-right:1px solid var(--border);overflow:hidden;font-family:'Cascadia Code','Consolas','Courier New',monospace;font-size:13px;line-height:20px;padding-top:10px;box-sizing:border-box;text-align:right;padding-right:8px;color:var(--text-2);user-select:none;pointer-events:none;z-index:2;}
-  #search-hl-overlay{display:none;position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;font-family:'Cascadia Code','Consolas','Courier New',monospace;font-size:13px;line-height:20px;padding:10px 16px 10px 56px;white-space:pre;overflow:hidden;box-sizing:border-box;z-index:3;color:transparent;word-break:normal;}
+  /* Search highlight overlay: font metrics, size and padding are mirrored
+     from the textarea's computed style by renderSearchHighlight() so CSS
+     overrides (like the mobile 16px input rule) can never desync them. */
+  #search-hl-overlay{display:none;position:absolute;top:0;left:0;pointer-events:none;overflow:hidden;box-sizing:border-box;z-index:3;color:transparent;padding:0;}
   .srch-match{color:var(--green);background:rgba(80,200,80,0.15);border-radius:2px;}
   .srch-current{color:#4dff91;background:rgba(77,255,145,0.28);border-radius:2px;box-shadow:0 0 0 1px rgba(77,255,145,0.55);}
   .panel-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg-2);}
@@ -1047,8 +1050,56 @@ function collapseAll(){Object.keys(ftExpanded).forEach(k=>ftExpanded[k]=false);r
 // ══ EDITOR ════════════════════════════════════════════════════════════
 const editor=document.getElementById('editor');
 function renderLineNumbers(){const g=document.getElementById('line-gutter');if(!g)return;if(editor.classList.contains('hidden')){g.style.display='none';return;}g.style.display='block';g.style.fontSize=S.fontSize+'px';const count=editor.value.split('\n').length;let h='';for(let i=1;i<=count;i++)h+=`<div>${i}</div>`;g.innerHTML=h;g.scrollTop=editor.scrollTop;}
-function renderSearchHighlight(){const ov=document.getElementById('search-hl-overlay');if(!ov)return;if(!searchOn||!_searchMatches.length){ov.style.display='none';return;}ov.style.display='block';ov.style.fontSize=S.fontSize+'px';ov.style.fontFamily=editor.style.fontFamily||"'Cascadia Code','Consolas','Courier New',monospace";ov.style.whiteSpace=editor.style.whiteSpace||'pre';ov.style.tabSize=String(S.tabSize);const t=editor.value;const eh=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');let h='',l=0;_searchMatches.forEach((m,i)=>{h+=eh(t.substring(l,m.index));h+=`<span class="${i===_searchIdx?'srch-current':'srch-match'}">${eh(m[0])}</span>`;l=m.index+m[0].length;});h+=eh(t.substring(l));ov.innerHTML=h;ov.scrollTop=editor.scrollTop;ov.scrollLeft=editor.scrollLeft;}
-editor.addEventListener('scroll',()=>{renderLineNumbers();const ov=document.getElementById('search-hl-overlay');if(ov&&ov.style.display!=='none'){ov.scrollTop=editor.scrollTop;ov.scrollLeft=editor.scrollLeft;}});
+// ── search highlight overlay ──
+// Mirrors the textarea's computed metrics and renders ONLY the visible
+// lines (virtualized, positioned by transform) instead of re-escaping the
+// whole file into innerHTML on every keystroke/scroll.
+const _hlEsc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function _hlLineOffset(t,line){let idx=0;for(let i=0;i<line;i++){const n=t.indexOf('\n',idx);if(n<0)return t.length;idx=n+1;}return idx;}
+function _hlBuild(t,a,b){
+  // highlighted HTML for t[a..b) using matches that intersect the slice
+  let h='',pos=a;
+  for(let i=0;i<_searchMatches.length;i++){
+    const m=_searchMatches[i],s=m.index,e=s+m[0].length;
+    if(e<=a)continue;if(s>=b)break;
+    const cs=Math.max(s,a),ce=Math.min(e,b);
+    h+=_hlEsc(t.substring(pos,cs));
+    h+=`<span class="${i===_searchIdx?'srch-current':'srch-match'}">${_hlEsc(t.substring(cs,ce))}</span>`;
+    pos=ce;
+  }
+  return h+_hlEsc(t.substring(pos,b));
+}
+function renderSearchHighlight(){
+  const ov=document.getElementById('search-hl-overlay');if(!ov)return;
+  if(!searchOn||!_searchMatches.length){ov.style.display='none';ov.innerHTML='';return;}
+  const cs=getComputedStyle(editor);
+  // mirror the textarea's real (computed) metrics — immune to !important CSS
+  ['fontFamily','fontSize','fontWeight','fontStyle','lineHeight','letterSpacing','tabSize','whiteSpace','wordBreak','overflowWrap'].forEach(p=>{ov.style[p]=cs[p];});
+  ov.style.display='block';
+  ov.style.width=editor.clientWidth+'px';   // clientWidth excludes the scrollbar
+  ov.style.height=editor.clientHeight+'px';
+  const lh=parseFloat(cs.lineHeight)||20,padTop=parseFloat(cs.paddingTop)||0,padLeft=parseFloat(cs.paddingLeft)||0;
+  const t=editor.value;
+  let inner=ov.firstElementChild;
+  if(!inner){inner=document.createElement('div');inner.style.cssText='position:absolute;top:0;left:0;white-space:inherit;word-break:inherit;overflow-wrap:inherit;will-change:transform;';ov.appendChild(inner);}
+  if(cs.whiteSpace==='pre'){
+    // no wrap: one logical line per row — render only the visible slice
+    const first=Math.max(0,Math.floor((editor.scrollTop-padTop)/lh)-3);
+    const count=Math.ceil(editor.clientHeight/lh)+6;
+    const a=_hlLineOffset(t,first),b=_hlLineOffset(t,first+count);
+    inner.style.width='auto';
+    inner.innerHTML=_hlBuild(t,a,b);
+    inner.style.transform=`translate(${padLeft-editor.scrollLeft}px,${padTop+first*lh-editor.scrollTop}px)`;
+  }else{
+    // word wrap: row geometry depends on wrap points, so render everything
+    // at exactly the textarea's content width so lines wrap identically
+    inner.style.width=(editor.clientWidth-padLeft-(parseFloat(cs.paddingRight)||0))+'px';
+    inner.innerHTML=_hlBuild(t,0,t.length);
+    inner.style.transform=`translate(${padLeft}px,${padTop-editor.scrollTop}px)`;
+  }
+}
+let _hlScrollRAF=0;
+editor.addEventListener('scroll',()=>{renderLineNumbers();if(searchOn&&_searchMatches.length&&!_hlScrollRAF){_hlScrollRAF=requestAnimationFrame(()=>{_hlScrollRAF=0;renderSearchHighlight();});}});
 editor.addEventListener('input',()=>{if(S.activeTab){S.files[S.activeTab].modified=true;renderTabs();renderTree();debouncedPersist();renderLineNumbers();if(searchOn){const q=document.getElementById('search-input').value;if(q){_searchMatches=[...editor.value.matchAll(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'))];_searchIdx=Math.min(_searchIdx,Math.max(0,_searchMatches.length-1));document.getElementById('search-count').textContent=_searchMatches.length?`${_searchIdx+1} of ${_searchMatches.length}`:'No matches';}else _searchMatches=[];renderSearchHighlight();}}});
 let _persistTimer;function debouncedPersist(){clearTimeout(_persistTimer);_persistTimer=setTimeout(persist,2000);}
 editor.addEventListener('keydown',e=>{
@@ -1078,7 +1129,7 @@ document.addEventListener('touchstart',snapSelIfEditor,{passive:true});
 function updateCursor(){const v=editor.value.substring(0,editor.selectionStart).split('\n');document.getElementById('cursor-pos').textContent=`Ln ${v.length}, Col ${v[v.length-1].length+1}`;}
 function editorCmd(cmd){editor.focus();document.execCommand(cmd);}
 function changeFontSize(d){S.fontSize=Math.max(8,Math.min(32,S.fontSize+d));editor.style.fontSize=S.fontSize+'px';renderLineNumbers();renderSearchHighlight();}
-function toggleWordWrap(){S.wordWrap=!S.wordWrap;editor.style.whiteSpace=S.wordWrap?'pre-wrap':'pre';}
+function toggleWordWrap(){S.wordWrap=!S.wordWrap;editor.style.whiteSpace=S.wordWrap?'pre-wrap':'pre';renderSearchHighlight();}
 function toggleIndent(){S.tabSize=S.tabSize===2?4:2;document.getElementById('indent-type').textContent=`Spaces: ${S.tabSize}`;}
 function applySettings(){S.fontSize=parseInt(document.getElementById('set-fontsize').value);editor.style.fontSize=S.fontSize+'px';editor.style.fontFamily=document.getElementById('set-fontfamily').value;editor.style.whiteSpace=document.getElementById('set-wordwrap').value;persist();renderLineNumbers();renderSearchHighlight();}
 function setAccentColor(c){document.documentElement.style.setProperty('--accent',c);const r=parseInt(c.slice(1,3),16),g=parseInt(c.slice(3,5),16),b=parseInt(c.slice(5,7),16);document.documentElement.style.setProperty('--accent-dim',`rgba(${r},${g},${b},0.18)`);persist();}
@@ -1122,7 +1173,7 @@ document.getElementById('search-input').addEventListener('input',e=>{const q=e.t
 document.getElementById('search-input').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.shiftKey?searchPrev():searchNext();}if(e.key==='Escape')closeSearch();});
 function searchNext(){if(!_searchMatches.length)return;_searchIdx=(_searchIdx+1)%_searchMatches.length;scrollToMatch();}
 function searchPrev(){if(!_searchMatches.length)return;_searchIdx=(_searchIdx-1+_searchMatches.length)%_searchMatches.length;scrollToMatch();}
-function scrollToMatch(){const m=_searchMatches[_searchIdx];if(!m)return;const linesBefore=editor.value.substring(0,m.index).split('\n').length-1;editor.scrollTop=Math.max(0,linesBefore*20+10-editor.clientHeight/2);document.getElementById('search-count').textContent=`${_searchIdx+1} of ${_searchMatches.length}`;renderSearchHighlight();}
+function scrollToMatch(){const m=_searchMatches[_searchIdx];if(!m)return;const cs=getComputedStyle(editor);const lh=parseFloat(cs.lineHeight)||20;const linesBefore=editor.value.substring(0,m.index).split('\n').length-1;editor.scrollTop=Math.max(0,linesBefore*lh+(parseFloat(cs.paddingTop)||0)-editor.clientHeight/2);document.getElementById('search-count').textContent=`${_searchIdx+1} of ${_searchMatches.length}`;renderSearchHighlight();}
 function globalSearch(q){const r=document.getElementById('search-results');if(!q){r.innerHTML='';return;}let h='';Object.entries(S.files).forEach(([path,file])=>{const lines=file.content.split('\n');const ms=[];lines.forEach((line,i)=>{if(line.toLowerCase().includes(q.toLowerCase())){const hi=line.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark>${m}</mark>`);ms.push({n:i+1,t:hi});}});if(ms.length){h+=`<div class="search-result-file">${path} (${ms.length})</div>`;ms.slice(0,5).forEach(m=>{h+=`<div class="search-result-line" onclick="openTab('${path}')"><span class="search-result-num">${m.n}</span><span style="font-size:12px;">${m.t}</span></div>`;});}});r.innerHTML=h||'<div style="color:var(--text-2);font-size:12px;padding:8px;">No results</div>';}
 
 // ══ TERMINAL ════════════════════════════════════════════════════════════
