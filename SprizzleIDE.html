@@ -218,44 +218,121 @@
   #files-panel.drop-active{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--accent-dim);}
   #files-panel.drop-active #file-tree{opacity:.45;pointer-events:none;}
 
+  /* ═══ MOBILE DOCK — hidden on desktop ═══ */
+  #mob-dock{display:none;}
+
+  /* ═══════════ MOBILE PORTRAIT — LIQUID GLASS PANEL VIEW ═══════════ */
   @media (max-width: 768px) and (orientation: portrait) {
-    html{background:var(--bg-0);}
+    :root{
+      --glass:rgba(21,21,28,.55);
+      --glass-strong:rgba(24,24,32,.8);
+      --glass-line:rgba(255,255,255,.09);
+      --glass-hi:inset 0 1px 0 rgba(255,255,255,.07);
+    }
     html,body{width:100%;max-width:100vw;overflow:hidden;height:100%;height:100dvh;}
-    #app{width:100%;max-width:100vw;flex-direction:column;overflow:hidden;height:100vh;height:100dvh;box-sizing:border-box;background:var(--bg-0);position:relative;}
-    #activity-bar{position:fixed;top:0;left:0;right:0;z-index:30;}
-    #header{position:fixed;bottom:0;left:0;right:0;padding-bottom:env(safe-area-inset-bottom);z-index:30;width:100%;max-width:100vw;height:48px;box-sizing:content-box;overflow:visible;}
-    #header-scroll{flex-wrap:nowrap;overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch;}
+    body{background:
+      radial-gradient(42% 34% at 12% 8%, rgba(108,127,255,.30), transparent 72%),
+      radial-gradient(38% 30% at 90% 14%, rgba(198,120,221,.20), transparent 72%),
+      radial-gradient(52% 40% at 50% 102%, rgba(86,182,194,.18), transparent 74%),
+      var(--bg-0);}
+    #app{width:100%;max-width:100vw;flex-direction:column;overflow:hidden;height:100vh;height:100dvh;box-sizing:border-box;background:transparent;position:relative;}
+
+    /* ── floating glass header ── */
+    #header{position:fixed;top:calc(env(safe-area-inset-top) + 8px);left:10px;right:10px;height:46px;z-index:40;
+      background:var(--glass);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);
+      border:1px solid var(--glass-line);border-radius:23px;overflow:hidden;
+      box-shadow:0 10px 36px rgba(0,0,0,.5), var(--glass-hi);}
+    #header-scroll{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;padding:0 6px;}
     #header-scroll::-webkit-scrollbar{height:0;}
     #header-scroll > *{flex-shrink:0;}
-    #main{order:1;flex:1;min-height:0;width:100%;max-width:100vw;margin-top:calc(42px + env(safe-area-inset-top));margin-bottom:calc(48px + 22px + env(safe-area-inset-bottom));height:auto;}
-    #status-bar{position:fixed;left:0;right:0;bottom:calc(48px + env(safe-area-inset-bottom));z-index:29;width:100%;max-width:100vw;}
     .header-spacer{display:none;}
-    .logo{font-size:13px;padding:0 10px;}
-    .menu-item{padding:0 8px;font-size:11px;}
-    .header-btn{padding:0 10px;font-size:11px;}
-    .run-btn,.preview-btn{padding:0 10px;font-size:11px;}
+    .logo{font-size:12px;padding:0 10px;border-right:none;}
+    .menu-item{height:32px;align-self:center;padding:0 10px;font-size:12px;border-radius:16px;}
+    .menu-item:hover,.menu-item.menu-open{background:rgba(255,255,255,.08);}
+    .header-btn{height:32px;align-self:center;padding:0 10px;font-size:11px;border-radius:16px;}
+    .run-btn,.preview-btn{height:30px;margin:0 4px;padding:0 12px;font-size:11px;border-radius:15px;}
     .menu-item.menu-open .menu-dropdown{max-width:90vw;max-height:60vh;overflow-y:auto;z-index:99999;}
-    #main.split-container{flex-direction:column;overflow-y:auto;overflow-x:hidden;align-items:stretch;}
-    #center{display:contents;}
-    #activity-bar{width:100%;height:42px;flex-direction:row;border-right:none;border-bottom:1px solid var(--border);padding:env(safe-area-inset-top) 8px 0 8px;justify-content:space-between;align-items:center;box-sizing:content-box;overflow:visible;flex-shrink:0;order:0;background:var(--bg-1);}
-    #activity-bar .activity-group{flex-direction:row;gap:6px;flex-shrink:0;}
+
+    /* ── segmented activity bar — shown in Files view ── */
+    #activity-bar{display:none;position:fixed;top:calc(env(safe-area-inset-top) + 62px);left:10px;right:10px;height:44px;z-index:39;
+      width:auto;flex-direction:row;align-items:center;justify-content:space-between;padding:0 8px;gap:4px;
+      background:var(--glass);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);
+      border:1px solid var(--glass-line);border-radius:22px;
+      box-shadow:0 8px 28px rgba(0,0,0,.4), var(--glass-hi);}
+    #app[data-mview="files"] #activity-bar{display:flex;}
+    #activity-bar .activity-group{flex-direction:row;gap:4px;flex-shrink:0;}
     #activity-bar .activity-spacer{flex:1 1 auto;display:block;}
-    #activity-bar .activity-notch-gap{flex:0 0 32px;width:32px;}
+    #activity-bar .activity-notch-gap{display:none;}
     #activity-bar .tooltip{display:none!important;}
+    .activity-btn{width:38px;height:34px;border-radius:17px;font-size:15px;}
+    .activity-btn.active{box-shadow:0 0 14px rgba(108,127,255,.35);}
+
+    /* ── panel stage ── */
+    #main,#main.split-container{position:relative;display:block;flex:1;min-height:0;width:100%;max-width:100vw;overflow:hidden;
+      margin-top:calc(env(safe-area-inset-top) + 62px);
+      margin-bottom:calc(env(safe-area-inset-bottom) + 104px);height:auto;}
+    #app[data-mview="files"] #main{margin-top:calc(env(safe-area-inset-top) + 114px);}
+    #center{display:contents;}
     .resize-h,.resize-v{display:none!important;}
-    #sidebar,#editor-area,#bottom-panel,#ai-panel{width:100%!important;height:150px!important;flex:0 0 150px!important;border-right:none;border-left:none;border-bottom:1px solid var(--border);position:relative;box-sizing:border-box;transition:flex-basis .28s ease, height .28s ease, order .01s;overflow:hidden;}
-    #editor-area{display:flex;flex-direction:column;}
-    #editor-area #editor-wrapper{flex:1;min-height:0;}
-    #editor-area{order:1;}
-    #sidebar{order:2;}
-    #bottom-panel{order:3;}
-    #ai-panel{order:4;}
-    #main.split-container .mobile-panel-active{flex:0 0 auto!important;height:auto!important;aspect-ratio:1/1;width:100%;z-index:5;box-shadow:0 4px 20px rgba(0,0,0,.4);border-color:var(--accent);}
-    #file-tree,#search-panel-sidebar,#git-panel-sidebar,#github-panel-content,#terminal,#ai-messages{overflow-y:auto;}
-    #status-bar{overflow-x:auto;white-space:nowrap;}
+
+    /* ── glass panel cards ── */
+    #sidebar,#editor-area,#bottom-panel,#ai-panel{
+      position:absolute;top:2px;bottom:2px;left:10px;right:10px;width:auto!important;height:auto!important;
+      display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;border-radius:20px;
+      background:var(--glass);backdrop-filter:blur(26px) saturate(160%);-webkit-backdrop-filter:blur(26px) saturate(160%);
+      border:1px solid var(--glass-line);box-shadow:0 14px 44px rgba(0,0,0,.5), var(--glass-hi);
+      opacity:0;transform:translateX(12%) scale(.96);pointer-events:none;
+      transition:transform .38s cubic-bezier(.32,.72,.24,1), opacity .3s ease;}
+    #app:not([data-mview]) #editor-area{opacity:1;transform:none;pointer-events:auto;}
+    #main .mob-left{transform:translateX(-12%) scale(.96);opacity:0;pointer-events:none;}
+    #main .mob-right{transform:translateX(12%) scale(.96);opacity:0;pointer-events:none;}
+    #main .mob-active{opacity:1;transform:none;pointer-events:auto;z-index:5;}
+    #editor-area #editor-wrapper{flex:1;min-height:0;background:rgba(8,8,12,.35);}
+    textarea#editor{background:transparent;}
+    #tabs{height:38px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--glass-line);}
+    .tab{border-right:1px solid var(--glass-line);}
+    .tab.active{background:rgba(108,127,255,.10);}
+    .sidebar-header{border-bottom:1px solid var(--glass-line);}
+    .panel-tabs{background:rgba(255,255,255,.03);border-bottom:1px solid var(--glass-line);}
+    #terminal{background:rgba(8,8,12,.30);}
+    .term-input-row{border-top:1px solid var(--glass-line);background:rgba(8,8,12,.25);}
+    .ai-header{border-bottom:1px solid var(--glass-line);}
+    .ai-input-area{border-top:1px solid var(--glass-line);}
+    #ai-input{background:rgba(8,8,12,.35);}
+    .ai-msg.assistant{background:rgba(255,255,255,.06);}
+    #file-tree,#search-panel-sidebar,#git-panel-sidebar,#github-panel-content,#terminal,#ai-messages{overflow-y:auto;-webkit-overflow-scrolling:touch;}
+
+    /* ── glass status strip ── */
+    #status-bar{position:fixed;left:14px;right:14px;bottom:calc(env(safe-area-inset-bottom) + 76px);height:22px;z-index:38;
+      width:auto;max-width:none;overflow-x:auto;white-space:nowrap;font-size:10px;padding:0 12px;gap:12px;
+      background:rgba(108,127,255,.10);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
+      border:1px solid var(--glass-line);border-radius:11px;box-shadow:var(--glass-hi);}
+    #status-bar::-webkit-scrollbar{height:0;}
+
+    /* ── floating glass dock ── */
+    #mob-dock{display:flex;position:fixed;left:14px;right:14px;bottom:calc(env(safe-area-inset-bottom) + 10px);height:60px;z-index:40;
+      align-items:stretch;justify-content:space-around;gap:2px;padding:6px;
+      background:var(--glass-strong);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);
+      border:1px solid var(--glass-line);border-radius:30px;
+      box-shadow:0 18px 52px rgba(0,0,0,.6), var(--glass-hi);}
+    .dock-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      border:none;background:none;color:var(--text-2);border-radius:24px;cursor:pointer;font-size:16px;font-family:inherit;
+      transition:color .25s ease, background .25s ease, box-shadow .25s ease, transform .15s ease;}
+    .dock-btn span{font-size:9px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;}
+    .dock-btn.active{color:var(--accent);
+      background:linear-gradient(180deg, rgba(108,127,255,.24), rgba(108,127,255,.08));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.12), 0 0 16px rgba(108,127,255,.22);}
+    .dock-btn:active{transform:scale(.94);}
+
+    /* ── glass menus & modals ── */
+    .ctx-menu{background:var(--glass-strong);backdrop-filter:blur(30px) saturate(170%);-webkit-backdrop-filter:blur(30px) saturate(170%);
+      border:1px solid var(--glass-line);border-radius:16px;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.6);}
+    .modal-overlay{background:rgba(0,0,0,.45);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+    .modal{width:min(460px,92vw);background:var(--glass-strong);backdrop-filter:blur(32px) saturate(170%);-webkit-backdrop-filter:blur(32px) saturate(170%);
+      border:1px solid var(--glass-line);border-radius:22px;box-shadow:0 24px 64px rgba(0,0,0,.65), var(--glass-hi);}
+
     input,textarea,select,#editor,#term-input,#ai-input{font-size:16px!important;}
     .form-input,.form-select{font-size:16px!important;}
-    #tabs{height:34px;}
   }
 
   @media (max-width: 932px) and (orientation: landscape) {
@@ -556,6 +633,14 @@
     <div class="status-item" id="file-lang">Plain Text</div>
     <div class="status-item" id="indent-type" onclick="toggleIndent()" style="cursor:pointer">Spaces: 2</div>
   </div>
+
+  <!-- ══ MOBILE LIQUID GLASS DOCK ══ -->
+  <nav id="mob-dock">
+    <button class="dock-btn active" data-view="editor" onclick="mobSetView('editor')"><i class="fa-solid fa-code"></i><span>Code</span></button>
+    <button class="dock-btn" data-view="files" onclick="mobSetView('files')"><i class="fa-solid fa-folder-tree"></i><span>Files</span></button>
+    <button class="dock-btn" data-view="terminal" onclick="mobSetView('terminal')"><i class="fa-solid fa-terminal"></i><span>Term</span></button>
+    <button class="dock-btn" data-view="ai" onclick="mobSetView('ai')"><i class="fa-solid fa-wand-magic-sparkles"></i><span>AI</span></button>
+  </nav>
 </div>
 
 <!-- ══ MODALS ══ -->
@@ -1450,8 +1535,9 @@ function openMobileDropdown(menuItem,dropdown){
   dropdown.style.cssText=
     'display:block!important;position:fixed!important;z-index:99999!important;min-width:200px;'+
     'max-width:'+(vw-8)+'px;max-height:55vh;overflow-y:auto;overflow-x:hidden;'+
-    'background:var(--bg-2);border:1px solid var(--border);box-shadow:0 8px 32px rgba(0,0,0,.9);'+
-    (openUpward?'bottom:'+(vh-rect.top)+'px;top:auto;':'top:'+rect.bottom+'px;bottom:auto;')+
+    'background:rgba(24,24,32,.82);backdrop-filter:blur(30px) saturate(170%);-webkit-backdrop-filter:blur(30px) saturate(170%);'+
+    'border:1px solid rgba(255,255,255,.1);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.07);'+
+    (openUpward?'bottom:'+(vh-rect.top)+'px;top:auto;':'top:'+(rect.bottom+6)+'px;bottom:auto;')+
     'left:'+leftPos+';right:auto;';
 }
 
@@ -1615,21 +1701,58 @@ if(S.gh.token){ghLoadUser().then(()=>ghLoadRepos());}
 renderTree();renderTabs();
 updateCtxTokenBar(); // ← initial bar render
 
-// ══ MOBILE: TAP-TO-FOCUS PANEL SHUFFLE ════════════════════════════════════
-(function setupMobilePanels(){
+// ══ MOBILE: LIQUID GLASS PANEL VIEW ═══════════════════════════════════════
+// One full-screen glass panel at a time, navigated via the bottom dock
+// (or horizontal swipe). Views: editor | files | terminal | ai.
+(function setupMobilePanelView(){
   const mq=window.matchMedia('(max-width: 768px) and (orientation: portrait)');
-  const panelIds=['editor-area','sidebar','bottom-panel','ai-panel'];
-  const panels=panelIds.map(id=>document.getElementById(id)).filter(Boolean);
-  let stack=panels.slice();let activePanel=panels[0];
+  const VIEWS={editor:'editor-area',files:'sidebar',terminal:'bottom-panel',ai:'ai-panel'};
+  const ORDER=['editor','files','terminal','ai'];
+  const app=document.getElementById('app');
+  let current='editor';
   function isMobile(){return mq.matches;}
-  function applyOrder(){stack.forEach((p,i)=>{p.style.order=String(i+1);});panels.forEach(p=>p.classList.toggle('mobile-panel-active',p===activePanel));}
-  function focusPanel(panel){if(panel===activePanel)return;const prevActive=activePanel;stack=stack.filter(p=>p!==panel&&p!==prevActive);stack.splice(1,0,panel);stack.push(prevActive);activePanel=panel;applyOrder();}
-  function resetInlineStyles(){panels.forEach(p=>{p.style.order='';p.classList.remove('mobile-panel-active');});}
-  document.addEventListener('click',function(e){if(!isMobile())return;const target=e.target;if(target.closest('button, a, input, textarea, select, [onclick], .ctx-menu, .modal-overlay'))return;let clickedPanel=null;for(const p of panels){if(p.contains(target)){clickedPanel=p;break;}}if(clickedPanel)focusPanel(clickedPanel);},true);
-  if(isMobile())applyOrder();
-  function handleViewportChange(){if(isMobile())applyOrder();else resetInlineStyles();}
+  window.mobSetView=function(name){
+    if(!VIEWS[name])return;
+    current=name;
+    if(!isMobile())return;
+    app.dataset.mview=name;
+    const ci=ORDER.indexOf(name);
+    ORDER.forEach((k,i)=>{
+      const el=document.getElementById(VIEWS[k]);if(!el)return;
+      el.classList.toggle('mob-active',i===ci);
+      el.classList.toggle('mob-left',i<ci);
+      el.classList.toggle('mob-right',i>ci);
+      if(i===ci&&el.style.display==='none')el.style.display='flex';
+    });
+    document.querySelectorAll('#mob-dock .dock-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
+  };
+  // Route the legacy panel toggles into the panel view while on mobile.
+  const _togglePanel=window.togglePanel;
+  window.togglePanel=function(p){if(isMobile()){mobSetView(p==='bottom'?'terminal':p==='ai'?'ai':'editor');return;}_togglePanel(p);};
+  const _setActivity=window.setActivity;
+  window.setActivity=function(n){_setActivity(n);if(isMobile())mobSetView('files');};
+  // Swipe between panels — skipped when the gesture starts on editable or
+  // horizontally-scrollable UI so code panning and menus keep working.
+  let sx=0,sy=0,st=null;
+  document.addEventListener('touchstart',e=>{if(!isMobile())return;const t=e.touches[0];sx=t.clientX;sy=t.clientY;st=e.target;},{passive:true});
+  document.addEventListener('touchend',e=>{
+    if(!isMobile()||!st)return;
+    const skip=st.closest&&st.closest('textarea,input,select,#tabs,#header,#mob-dock,#status-bar,.menu-dropdown,.modal-overlay,.ctx-menu');
+    const t=e.changedTouches[0];const dx=t.clientX-sx,dy=t.clientY-sy;st=null;
+    if(skip||Math.abs(dx)<64||Math.abs(dx)<Math.abs(dy)*2)return;
+    const ni=ORDER.indexOf(current)+(dx<0?1:-1);
+    if(ni>=0&&ni<ORDER.length)mobSetView(ORDER[ni]);
+  },{passive:true});
+  function handleViewportChange(){
+    if(isMobile()){mobSetView(current);}
+    else{
+      delete app.dataset.mview;
+      ORDER.forEach(k=>{const el=document.getElementById(VIEWS[k]);el&&el.classList.remove('mob-active','mob-left','mob-right');});
+    }
+  }
   mq.addEventListener?.('change',handleViewportChange);
   window.addEventListener('resize',handleViewportChange);
+  handleViewportChange();
 })();
 
 // ══ iOS SAFARI LANDSCAPE: auto-dismiss the URL bar ════════════════════════
