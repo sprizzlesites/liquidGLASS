@@ -727,7 +727,8 @@
         <div class="form-hint">
           Total token budget for the conversation (history + system prompt + file context).<br>
           A <strong style="color:var(--accent);">sliding window</strong> automatically drops the oldest messages to stay within this limit.<br>
-          <strong>Default:</strong> 4096 &nbsp;|&nbsp; WebLLM 0.5B: 4096 &nbsp;|&nbsp; GPT-4o / Claude: 32768–131072 &nbsp;|&nbsp; Ollama models vary.
+          <strong>Default:</strong> 4096 &nbsp;|&nbsp; WebLLM 0.5B: 4096 &nbsp;|&nbsp; GPT-4o / Claude: 32768–131072 &nbsp;|&nbsp; Ollama models vary.<br>
+          <span id="cfg-ctx-cap-note" style="color:var(--amber);"></span>
         </div>
       </div>
       <div class="form-group">
@@ -1253,7 +1254,7 @@ function shortModelName(id){ return (id||'').replace(/-instruct/i,'').replace(/-
 function webllmAvailable(){return typeof navigator!=='undefined'&&!!navigator.gpu;}
 async function testWebLLM(){const res=document.getElementById('webllm-test-result');if(webllmAvailable()){res.textContent='✓ WebGPU available';res.style.color='var(--green)';document.getElementById('webllm-dot').style.background='var(--green)';}else{res.textContent='✗ WebGPU not available — use Chrome/Edge 113+ and enable WebGPU';res.style.color='var(--red)';document.getElementById('webllm-dot').style.background='var(--red)';}}
 async function ensureWebLLMReady(){if(!window.webllm){await new Promise(res=>{if(window.webllm)return res();window.addEventListener('webllm-ready',res,{once:true});setTimeout(res,8000);});}if(!window.webllm)throw new Error('WebLLM library failed to load (check your network connection)');if(!webllmAvailable())throw new Error('WebGPU is not available in this browser. Use Chrome or Edge 113+.');}
-async function loadWebLLMModel(modelId){modelId=modelId||document.getElementById('cfg-webllm-model')?.value||S.ai.webllmModel;if(webllmLoading)return;if(webllmEngine&&webllmLoadedModel===modelId)return webllmEngine;webllmLoading=true;const prog=document.getElementById('webllm-progress'),bar=document.getElementById('webllm-progress-bar'),txt=document.getElementById('webllm-progress-text');const res=document.getElementById('webllm-test-result');if(res){res.textContent='';}if(prog){prog.style.display='block';bar.style.width='0%';txt.textContent='Initializing...';}try{await ensureWebLLMReady();const initProgressCallback=(report)=>{const pct=Math.round((report.progress||0)*100);if(bar)bar.style.width=pct+'%';if(txt)txt.textContent=report.text||`Loading... ${pct}%`;if(document.getElementById('webllm-status-text'))document.getElementById('webllm-status-text').textContent=`Loading ${modelId}: ${pct}%`;};const wantedWin=S.ai.contextWindow||4096;const engineWin=Math.max(1024,Math.min(wantedWin,isMobileDevice()?2048:8192));webllmEngine=await window.webllm.CreateMLCEngine(modelId,{initProgressCallback},{context_window_size:engineWin});webllmCtxWin=engineWin;webllmLoadedModel=modelId;if(engineWin<wantedWin)aiMsg('system',`ℹ️ Engine context window capped at ${engineWin.toLocaleString()} tokens on this device to avoid browser memory kills (you asked for ${wantedWin.toLocaleString()}). History trimming uses the capped value.`);if(txt)txt.textContent='✓ Model loaded and ready';if(bar)bar.style.width='100%';if(res){res.textContent='✓ Model ready';res.style.color='var(--green)';}document.getElementById('webllm-dot').style.background='var(--green)';return webllmEngine;}catch(e){if(txt)txt.textContent='Failed: '+e.message;if(res){res.textContent='✗ '+e.message;res.style.color='var(--red)';}webllmEngine=null;webllmLoadedModel=null;throw e;}finally{webllmLoading=false;}}
+async function loadWebLLMModel(modelId){modelId=modelId||document.getElementById('cfg-webllm-model')?.value||S.ai.webllmModel;if(webllmLoading)return;if(webllmEngine&&webllmLoadedModel===modelId)return webllmEngine;webllmLoading=true;const prog=document.getElementById('webllm-progress'),bar=document.getElementById('webllm-progress-bar'),txt=document.getElementById('webllm-progress-text');const res=document.getElementById('webllm-test-result');if(res){res.textContent='';}if(prog){prog.style.display='block';bar.style.width='0%';txt.textContent='Initializing...';}try{await ensureWebLLMReady();const initProgressCallback=(report)=>{const pct=Math.round((report.progress||0)*100);if(bar)bar.style.width=pct+'%';if(txt)txt.textContent=report.text||`Loading... ${pct}%`;if(document.getElementById('webllm-status-text'))document.getElementById('webllm-status-text').textContent=`Loading ${modelId}: ${pct}%`;};const engineWin=Math.max(1024,effectiveCtxWindow());webllmEngine=await window.webllm.CreateMLCEngine(modelId,{initProgressCallback},{context_window_size:engineWin});webllmCtxWin=engineWin;webllmLoadedModel=modelId;if(txt)txt.textContent='✓ Model loaded and ready';if(bar)bar.style.width='100%';if(res){res.textContent='✓ Model ready';res.style.color='var(--green)';}document.getElementById('webllm-dot').style.background='var(--green)';return webllmEngine;}catch(e){if(txt)txt.textContent='Failed: '+e.message;if(res){res.textContent='✗ '+e.message;res.style.color='var(--red)';}webllmEngine=null;webllmLoadedModel=null;throw e;}finally{webllmLoading=false;}}
 async function callWebLLM(messages,sys){const modelId=S.ai.webllmModel;const engine=await loadWebLLMModel(modelId);let maxTok=S.ai.maxTokens;if(!Number.isFinite(maxTok)||maxTok<=0)maxTok=1024;const cap=/0\.[56]B|1\.[05]B|Phi-1_5|gemma-2-2b/i.test(modelId)?1024:(/1\.7B|3B|Phi-3\.5/i.test(modelId)?2048:4096);maxTok=Math.min(maxTok,cap);if(webllmCtxWin)maxTok=Math.min(maxTok,Math.max(256,Math.floor(webllmCtxWin*0.4)));const reply=await engine.chat.completions.create({messages:[{role:'system',content:sys},...messages],temperature:S.ai.temperature,top_p:0.8,presence_penalty:0.5,max_tokens:maxTok,extra_body:{enable_thinking:false}});return reply.choices?.[0]?.message?.content||'';}
 
 // ══ TOKEN ESTIMATION & SLIDING CONTEXT WINDOW ════════════════════════════
@@ -1263,11 +1264,17 @@ function estimateTokens(text){
   return Math.ceil((text||'').length/4);
 }
 
-// The window the conversation must actually fit in: the user-configured
-// budget, further capped by the loaded WebLLM engine's context window.
+// In-browser (WebGPU) models must cap their context or the tab gets OOM-killed
+// — tighter on mobile. Cloud/local-server backends have no such limit.
+const WEBLLM_MOBILE_CTX_CAP=2048, WEBLLM_DESKTOP_CTX_CAP=8192;
+function webllmCtxCap(){return isMobileDevice()?WEBLLM_MOBILE_CTX_CAP:WEBLLM_DESKTOP_CTX_CAP;}
+// The window the conversation must actually fit in: the user-configured budget,
+// capped by what an in-browser model can run on this device. Derived from the
+// device (not the loaded engine) so it's correct before the model finishes
+// loading and stays consistent in the token bar.
 function effectiveCtxWindow(){
   const cfg=S.ai.contextWindow||4096;
-  return (S.ai.backend==='webllm'&&webllmCtxWin)?Math.min(cfg,webllmCtxWin):cfg;
+  return S.ai.backend==='webllm'?Math.min(cfg,webllmCtxCap()):cfg;
 }
 
 /**
@@ -1339,7 +1346,7 @@ function updateCtxTokenBar(){
   const fillEl  = document.getElementById('ctx-token-fill');
   if(!labelEl || !fillEl) return;
 
-  const sys   = buildSys();
+  const sys   = buildSys((document.getElementById('ai-input')||{}).value || '');
   const sysT  = estimateTokens(sys);
   const histT = S.aiHistory.reduce((a,m) => a + estimateTokens(m.content) + 8, 0);
   const inputT= estimateTokens((document.getElementById('ai-input')||{}).value || '');
@@ -1370,26 +1377,40 @@ function stripThink(t){
 // Small models can't fit whole files in their context window, so instead of
 // inlining big files we give the model line-oriented commands (@@READ,
 // @@REPLACE, ...) and run a bounded request→result loop in sendAIMessage.
-const AI_READ_MAX_LINES=120, AI_TOOL_MAX_STEPS=6, AI_INLINE_FILE_LIMIT=3000;
-// Fingerprint phrases from the tool instructions: if a reply contains them,
-// the model is echoing its prompt ("prompt bleed") rather than acting.
-const AI_ECHO_MARKS=['the exact existing text','overwrite those lines with the fenced','find where that text appears','end your reply with ONE command'];
+const AI_TOOL_MAX_STEPS=6;
+// A single @@READ chunk (and the tool note) must stay well under the context
+// window or a chunk + prompt overflows it — scale both to the live budget.
+function aiReadMaxLines(){return Math.max(30,Math.min(120,Math.floor(effectiveCtxWindow()/48)));}
+// Fingerprint phrases unique to the tool instructions: if a non-command reply
+// contains them, the model is echoing its prompt ("prompt bleed"), not acting.
+const AI_ECHO_MARKS=['exact old text','locate text (file:line)','fence is file:PATH','Prefer @@EDIT for find/replace'];
+
+// Skip the whole tool note for plain conversation so a tiny model can actually
+// read the user's question instead of drowning in instructions.
+function aiMsgNeedsTools(msg){
+  const m=(msg||'').toLowerCase();
+  const smalltalk=/\b(hi|hey|hello|yo|sup|thanks|thank you|who are you|what('|’)?s your name|what is your name|how are you|good (morning|afternoon|evening)|help)\b/.test(m);
+  const codey=/\b(file|files|code|read|edit|replace|fix|change|create|write|add|delete|remove|rename|refactor|function|method|line|lines|css|html|js|json|python|bug|error|class|variable|import|export|string|component|style|button|api|test|build|run|open|save|search)\b/.test(m);
+  if(smalltalk&&!codey)return false;
+  return true;
+}
 
 function buildToolsSystemNote(){
-  const active=S.activeTab?`\nThe user's open file is "${S.activeTab}" — commands that omit the file name target it.`:'';
-  return `\n\nPROJECT TOOLS — to use a tool, end your reply with ONE command, then STOP. The result arrives in the next message; continue from there.
-@@LIST → list the project's files
-@@SEARCH some text → find where that text appears (returns file:line matches)
-@@READ FILE 1-80 → show those lines of a file (max ${AI_READ_MAX_LINES} per read)
-@@EDIT FILE → change text inside a file; immediately after the command write:
-<<<<<<< SEARCH
-the exact existing text
-=======
-the new text
->>>>>>> REPLACE
-@@REPLACE FILE 10-14 → overwrite those lines with the fenced code block that follows the command
-To create a NEW file: output one fenced code block whose opening fence is file: plus the file's path, containing the COMPLETE file contents (never a placeholder).
-Rules: for find-and-replace tasks use @@EDIT, copying the exact existing text from the file or a @@SEARCH result. Read before you edit; never guess line numbers. One command per reply. Apply changes with tools — never tell the user to copy/paste. When the task is done, reply with a short answer and no command.${active}`;
+  const rl=aiReadMaxLines();
+  const active=S.activeTab?`\nUnqualified commands target the open file "${S.activeTab}".`:'';
+  return `\n\nFILE TOOLS (use only when the task needs them) — end your reply with ONE command, then stop; its result comes back next turn:
+@@LIST — list files
+@@SEARCH text — locate text (file:line)
+@@READ path A-B — show lines A..B (≤${rl})
+@@EDIT path — then a block:
+<<< SEARCH
+exact old text
+===
+new text
+>>> REPLACE
+@@REPLACE path A-B — then a fenced code block with the replacement lines
+New file: one fenced block whose fence is file:PATH with the full contents.
+Prefer @@EDIT for find/replace using the real text. Read before editing. One command per reply; apply edits yourself, never ask the user to copy/paste.${active}`;
 }
 
 function aiResolvePath(p){
@@ -1418,7 +1439,7 @@ function parseAIToolCall(text){
       if(range){start=parseInt(range[1]);if(range[2])end=parseInt(range[2]);}
       else if(!path)path=tk.replace(/[,;]+$/,'');
     }
-    return {cmd:'READ',path:path||S.activeTab||'',start,end:end==null?start+AI_READ_MAX_LINES-1:end};
+    return {cmd:'READ',path:path||S.activeTab||'',start,end:end==null?start+aiReadMaxLines()-1:end};
   }
   r=line.match(/^@@REPLACE\s+(?:(\S+)\s+)?(\d+)\s*[-–:]\s*(\d+)/i);
   if(r){
@@ -1451,11 +1472,12 @@ function execAITool(t){
   if(!path)return {note:`${t.cmd.toLowerCase()} failed — file not found`,output:`ERROR: file "${t.path}" not found. Use @@LIST to see available files.`};
   const lines=S.files[path].content.split('\n');
   if(t.cmd==='READ'){
-    let a=Math.max(1,t.start||1),b=Math.min(lines.length,t.end||a+AI_READ_MAX_LINES-1);
-    if(b-a+1>AI_READ_MAX_LINES)b=a+AI_READ_MAX_LINES-1;
+    const rl=aiReadMaxLines();
+    let a=Math.max(1,t.start||1),b=Math.min(lines.length,t.end||a+rl-1);
+    if(b-a+1>rl)b=a+rl-1;
     if(a>lines.length)return {note:`read ${path} — out of range`,output:`ERROR: ${path} has only ${lines.length} lines.`};
     const chunk=lines.slice(a-1,b).map((l,i)=>(a+i)+'| '+l.slice(0,200)).join('\n');
-    const tail=b<lines.length?`\n(...continues to line ${lines.length} — next chunk: @@READ ${path} ${b+1}-${Math.min(lines.length,b+AI_READ_MAX_LINES)})`:'\n(end of file)';
+    const tail=b<lines.length?`\n(...continues to line ${lines.length} — next chunk: @@READ ${path} ${b+1}-${Math.min(lines.length,b+rl)})`:'\n(end of file)';
     return {note:`read ${path} lines ${a}–${b}`,output:`${path} lines ${a}-${b} of ${lines.length}:\n${chunk}${tail}`};
   }
   if(t.cmd==='REPLACE'){
@@ -1525,21 +1547,34 @@ function replaceSelectionOrFile(snippet){if(!S.activeTab){tw('AI tried to replac
 
 // ══ AI ════════════════════════════════════════════════════════════════
 function toggleCtx(k){S.ctx[k]=!S.ctx[k];document.getElementById('ctx-'+k).classList.toggle('active');}
-function buildSys(){
-  let s=S.ai.systemPrompt||'';
-  s+=buildToolsSystemNote();
-  if(S.ctx.file&&S.activeTab){
+// Build the system prompt, sized to the live context window. Tools are added
+// only when the message needs them (or we're mid tool-loop), and the open
+// file is inlined only if it fits in a small slice of the budget — otherwise
+// the model pages through it with @@READ. A hard cap guarantees the system
+// prompt can never crowd out the user's message + the model's reply.
+function buildSys(latestMsg,forceTools){
+  const win=effectiveCtxWindow();
+  const base=S.ai.systemPrompt||'';
+  const withTools=forceTools||aiMsgNeedsTools(latestMsg);
+  let s=base+(withTools?buildToolsSystemNote():'');
+  if(withTools&&S.ctx.file&&S.activeTab){
     const c=S.files[S.activeTab]?.content||'';
     const lines=c.split('\n');
-    if(c.length<=AI_INLINE_FILE_LIMIT){
-      s+=`\n\nCurrent file ${S.activeTab} (${lang(S.activeTab)}, ${lines.length} lines):\n\`\`\`\n${c}\n\`\`\``;
+    const inlineBudget=Math.floor(win*0.25); // the file must never dominate
+    if(estimateTokens(c)<=inlineBudget){
+      s+=`\n\nOpen file ${S.activeTab} (${lang(S.activeTab)}, ${lines.length} lines):\n\`\`\`\n${c}\n\`\`\``;
     }else{
-      // Large file: don't crush it into the context window — give a preview
-      // and let the model page through it with @@READ.
-      s+=`\n\nCurrent file ${S.activeTab} (${lang(S.activeTab)}) is LARGE: ${lines.length} lines (~${estimateTokens(c).toLocaleString()} tokens) — too big for your context window, so it is NOT included here. Read it chunk by chunk with @@READ ${S.activeTab} 1-${AI_READ_MAX_LINES} etc., and edit with @@REPLACE. Preview (lines 1-20):\n\`\`\`\n${lines.slice(0,20).map((l,i)=>(i+1)+'| '+l.slice(0,160)).join('\n')}\n\`\`\``;
+      s+=`\n\nOpen file ${S.activeTab} (${lang(S.activeTab)}, ${lines.length} lines) is too big to include — read it with @@READ ${S.activeTab} 1-${aiReadMaxLines()} and edit with @@EDIT/@@REPLACE. First lines:\n\`\`\`\n${lines.slice(0,12).map((l,i)=>(i+1)+'| '+l.slice(0,120)).join('\n')}\n\`\`\``;
     }
   }
-  if(S.ctx.errors&&S.problems.length)s+=`\n\nErrors:\n${S.problems.map(p=>`- ${p.message}`).join('\n')}`;
+  if(withTools&&S.ctx.errors&&S.problems.length)s+=`\n\nErrors:\n${S.problems.map(p=>`- ${p.message}`).join('\n')}`;
+  // Hard cap: sys ≤ 55% of the window. Shed the file/error context first,
+  // then fall back to the base prompt alone.
+  const capTok=Math.floor(win*0.55);
+  if(estimateTokens(s)>capTok){
+    s=base+(withTools?buildToolsSystemNote():'');
+    if(estimateTokens(s)>capTok)s=base;
+  }
   return s;
 }
 
@@ -1558,7 +1593,7 @@ async function sendAIMessage(){
     // it produces a final answer (or the step budget runs out).
     let r='',steps=0,bounces=0,lastReply=null;
     while(true){
-      r=stripThink(await callAI(S.aiHistory,buildSys()));
+      r=stripThink(await callAI(S.aiHistory,buildSys(msg,steps>0)));
       const tool=parseAIToolCall(r);
       // Tiny models sometimes parrot the file-block format with placeholder
       // contents, or echo the tool instructions verbatim, instead of doing
@@ -1657,10 +1692,24 @@ function openModelConfig(){
   document.getElementById('cfg-context-window').value=S.ai.contextWindow||4096; // ← NEW
   document.getElementById('cfg-auto-reset-ctx').checked=S.ai.autoResetCtx!==false;
   selectPreset(S.ai.backend||'webllm');
+  syncCtxWindowField();
   if(webllmAvailable())document.getElementById('webllm-dot').style.background=webllmEngine?'var(--green)':'var(--amber)';
   document.getElementById('model-modal').classList.remove('hidden');
 }
-function selectPreset(name){S.preset=name;document.querySelectorAll('.model-preset').forEach(p=>p.classList.remove('active'));document.getElementById('preset-'+name)?.classList.add('active');['webllm','ollama','lmstudio','openai','anthropic'].forEach(b=>{const el=document.getElementById('config-'+b);if(el)el.classList.toggle('hidden',b!==name);});}
+function selectPreset(name){S.preset=name;document.querySelectorAll('.model-preset').forEach(p=>p.classList.remove('active'));document.getElementById('preset-'+name)?.classList.add('active');['webllm','ollama','lmstudio','openai','anthropic'].forEach(b=>{const el=document.getElementById('config-'+b);if(el)el.classList.toggle('hidden',b!==name);});syncCtxWindowField();}
+// Reflect the in-browser device cap in the context-window field: WebLLM is
+// limited by WebGPU memory (2048 mobile / 8192 desktop); other backends aren't.
+function syncCtxWindowField(){
+  const inp=document.getElementById('cfg-context-window');const note=document.getElementById('cfg-ctx-cap-note');if(!inp)return;
+  if(S.preset==='webllm'){
+    const cap=webllmCtxCap();inp.max=cap;
+    if(parseInt(inp.value,10)>cap)inp.value=cap;
+    if(note)note.textContent=`In-browser (WebLLM) is capped at ${cap.toLocaleString()} tokens on this ${isMobileDevice()?'mobile device':'device'} to avoid browser memory limits.`;
+  }else{
+    inp.max=131072;
+    if(note)note.textContent='';
+  }
+}
 async function testOllamaConn(){const url=document.getElementById('cfg-ollama-url').value;const res=document.getElementById('ollama-test-result');res.textContent='⏳ Testing...';res.style.color='var(--amber)';try{const r=await fetch(`${url}/api/tags`,{signal:AbortSignal.timeout(5000)});if(r.ok){res.textContent='✓ Connected!';res.style.color='var(--green)';document.getElementById('ollama-dot').style.background='var(--green)';}else{res.textContent=`✗ Error ${r.status}`;res.style.color='var(--red)';}}catch(e){res.textContent='✗ Cannot connect — set OLLAMA_ORIGINS=* and restart Ollama';res.style.color='var(--red)';}}
 async function fetchOllamaModels(){const url=document.getElementById('cfg-ollama-url').value;const el=document.getElementById('ollama-models-list');el.style.display='block';el.innerHTML='⏳ Fetching...';try{const d=await(await fetch(`${url}/api/tags`)).json();const models=d.models||[];el.innerHTML=models.length?models.map(m=>`<div style="padding:4px;cursor:pointer;font-size:12px;border-radius:3px;color:var(--text-1);" onmouseover="this.style.background='var(--bg-3)'" onmouseout="this.style.background=''" onclick="document.getElementById('cfg-ollama-model').value='${m.name}'">${m.name} <span style="color:var(--text-2);font-size:10px;">${(m.size/1e9).toFixed(1)}GB</span></div>`).join(''):'<div style="color:var(--text-2);font-size:12px;">No models installed — run: ollama pull qwen2.5-coder:7b</div>';}catch(e){el.innerHTML='<div style="color:var(--red);font-size:12px;">Failed — is Ollama running and OLLAMA_ORIGINS=* set?</div>';}}
 async function testLMStudioConn(){const url=document.getElementById('cfg-lmstudio-url').value;const res=document.getElementById('lmstudio-test-result');res.textContent='⏳ Testing...';res.style.color='var(--amber)';try{const r=await fetch(`${url}/models`,{signal:AbortSignal.timeout(5000)});res.textContent=r.ok?'✓ Connected!':'✗ Error '+r.status;res.style.color=r.ok?'var(--green)':'var(--red)';}catch(e){res.textContent='✗ Cannot connect';res.style.color='var(--red)';}}
@@ -1685,6 +1734,8 @@ function saveModelConfig(){
   let cw=parseInt(document.getElementById('cfg-context-window').value,10);
   if(!Number.isFinite(cw)||cw<512) cw=4096;
   cw=Math.max(512,Math.min(131072,cw));
+  // In-browser models can't exceed the device's WebGPU memory cap.
+  if(S.preset==='webllm')cw=Math.min(cw,webllmCtxCap());
   document.getElementById('cfg-context-window').value=cw;
 
   Object.assign(S.ai,{
@@ -1903,6 +1954,10 @@ tw('Type "help" for commands list. Terminal is case sensitive','info');
   const backend=S.ai.backend||'webllm';
   // Ensure contextWindow has a valid value after hydration
   if(!S.ai.contextWindow||S.ai.contextWindow<512)S.ai.contextWindow=4096;
+  // For in-browser models, clamp the stored window to what this device can
+  // run, so the settings menu, token bar, and engine all agree (no "you asked
+  // for 4096 but got 2048" mismatch on a fresh mobile workspace).
+  if(backend==='webllm')S.ai.contextWindow=Math.min(S.ai.contextWindow,webllmCtxCap());
   // Migrate stale saved defaults from older versions: the old 0.2 temperature
   // makes small quantized Qwen3 models loop/derail, and the old generic
   // system prompt predates the tool loop and think-stripping.
@@ -1920,7 +1975,7 @@ tw('Type "help" for commands list. Terminal is case sensitive','info');
     }
     S.aiConnected=true;
     document.getElementById('ai-status-dot').style.background='var(--amber)';
-    aiMsg('system',`Loading default AI model (${name}) via WebLLM in your browser. Context window: ${(S.ai.contextWindow||4096).toLocaleString()} tokens. This downloads once and is cached — it may take a moment...`);
+    aiMsg('system',`Loading default AI model (${name}) via WebLLM in your browser. Context window: ${effectiveCtxWindow().toLocaleString()} tokens${isMobileDevice()?' (capped for mobile memory)':''}. This downloads once and is cached — it may take a moment...`);
     loadWebLLMModel(name).then(()=>{
       document.getElementById('ai-status-dot').style.background='var(--green)';
       aiMsg('system',`✓ ${shortModelName(name)} ready. Ask me anything about your code — I can read and edit project files chunk by chunk, even large ones.`);
