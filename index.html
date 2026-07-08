@@ -1398,6 +1398,15 @@ function stripThink(t){
 // inlining big files we give the model line-oriented commands (@@READ,
 // @@REPLACE, ...) and run a bounded request→result loop in sendAIMessage.
 const AI_TOOL_MAX_STEPS=6;
+// Metered cloud APIs (OpenAI/Gemini-compat/Anthropic) bill and rate-limit per
+// request; the agentic loop can fire several requests per message, so on those
+// backends we take fewer tool steps and space the calls out. Local/in-browser
+// backends (webllm/ollama/lmstudio) are free & unlimited — no throttle.
+function isMeteredBackend(){return S.ai.backend==='openai'||S.ai.backend==='anthropic';}
+function aiMaxToolSteps(){return isMeteredBackend()?4:AI_TOOL_MAX_STEPS;}
+function aiSleep(ms){return new Promise(r=>setTimeout(r,ms));}
+let aiBusy=false;        // re-entrancy guard: only one generation loop at a time
+let aiCooldownUntil=0;   // set from a 429 Retry-After — block sends until then
 // A single @@READ chunk (and the tool note) must stay well under the context
 // window or a chunk + prompt overflows it — scale both to the live budget.
 function aiReadMaxLines(){return Math.max(30,Math.min(120,Math.floor(effectiveCtxWindow()/48)));}
@@ -1601,6 +1610,13 @@ function buildSys(latestMsg,forceTools){
 async function sendAIMessage(){
   const inp=document.getElementById('ai-input');const msg=inp.value.trim();if(!msg)return;
   if(!S.aiConnected){aiMsg('system','⚠️ No AI model connected. Go to AI → Configure AI Model.');return;}
+  // Re-entrancy guard: one generation at a time. The send button is disabled
+  // mid-run, but the textarea's Enter key isn't — without this, pressing Enter
+  // during a tool loop starts a second concurrent loop that shares S.aiHistory
+  // (corrupting it) and doubles the request rate. Leave the user's text intact.
+  if(aiBusy){aiMsg('system','⏳ Still working on the previous message — please wait for it to finish.');return;}
+  if(Date.now()<aiCooldownUntil){aiMsg('system',`⏳ Rate-limited — please wait ${Math.ceil((aiCooldownUntil-Date.now())/1000)}s before sending again.`);return;}
+  aiBusy=true;
   const sel=S.ctx.selection?getsel():null;
   let uc=msg;if(sel)uc+=`\n\nSelected code:\n\`\`\`\n${sel}\n\`\`\``;
   aiMsg('user',msg);inp.value='';inp.style.height='auto';
@@ -1611,8 +1627,11 @@ async function sendAIMessage(){
     // Agentic loop: the model may issue @@ tool commands to read / search /
     // edit project files chunk by chunk. Each result is fed back to it until
     // it produces a final answer (or the step budget runs out).
-    let r='',steps=0,bounces=0,lastReply=null;
+    let r='',steps=0,bounces=0,lastReply=null;const maxSteps=aiMaxToolSteps();
     while(true){
+      // Space out requests to metered APIs so a multi-step loop doesn't burst
+      // past a free tier's per-minute limit.
+      if(steps>0&&isMeteredBackend())await aiSleep(1100);
       r=stripThink(await callAI(S.aiHistory,buildSys(msg,steps>0)));
       const tool=parseAIToolCall(r);
       // Tiny models sometimes parrot the file-block format with placeholder
@@ -1626,7 +1645,7 @@ async function sendAIMessage(){
       if(r===lastReply){aiMsg('system','⚠️ Model is repeating itself — stopping here.');break;}
       lastReply=r;
       if((junkEmpty||echoed)&&bounces>=2){aiMsg('system','⚠️ The model keeps echoing its instructions instead of acting — it is likely too small for this task. Try a larger model (tap the model badge).');break;}
-      if(steps>=AI_TOOL_MAX_STEPS){aiMsg('system','⚠️ Tool step limit reached — answering with what was gathered so far.');break;}
+      if(steps>=maxSteps){aiMsg('system','⚠️ Tool step limit reached — answering with what was gathered so far.');break;}
       steps++;if(junkEmpty||echoed)bounces++;
       S.aiHistory.push({role:'assistant',content:r});
       const res=tool?execAITool(tool)
@@ -1652,8 +1671,11 @@ async function sendAIMessage(){
     if(applied)tw(`✓ AI applied ${applied} change(s) to your project`,'info');
   }
   catch(e){th.remove();aiMsg('system','❌ '+e.message);}
-  document.getElementById('ai-send').disabled=false;
-  updateCtxTokenBar(); // refresh after assistant reply arrives
+  finally{
+    aiBusy=false;
+    document.getElementById('ai-send').disabled=false;
+    updateCtxTokenBar(); // refresh after assistant reply arrives
+  }
 }
 
 // ── callAI: applies sliding context window before every backend call ──
@@ -1664,8 +1686,18 @@ async function sendAIMessage(){
 // newline in a header value makes fetch() throw before any request is sent.
 function cleanBaseUrl(u){u=(u||'').trim().replace(/\/+$/,'');u=u.replace(/\/(chat\/completions|api\/chat)$/i,'');return u.replace(/\/+$/,'');}
 function cleanKey(k){return (k||'').replace(/\s+/g,'');}
-// Surface the API's own explanation instead of a bare status code.
-async function apiError(prefix,r){let d='';try{const j=await r.json();d=j.error?.message||j.message||(typeof j.error==='string'?j.error:'');}catch(e){}return new Error(`${prefix} ${r.status}${d?': '+d:''}`);}
+// Surface the API's own explanation instead of a bare status code, and treat
+// 429 specially: honour Retry-After and set a cooldown so we stop hammering.
+async function apiError(prefix,r){
+  let d='';try{const j=await r.json();d=j.error?.message||j.message||(typeof j.error==='string'?j.error:'');}catch(e){}
+  if(r.status===429){
+    const ra=parseInt((r.headers&&r.headers.get&&r.headers.get('retry-after'))||'',10);
+    const waitS=Number.isFinite(ra)&&ra>0?Math.min(ra,120):30;
+    aiCooldownUntil=Date.now()+waitS*1000;
+    return new Error(`${prefix} 429: rate limit / quota exceeded${d?' — '+d:''}. Pausing ${waitS}s before you can send again. Free tiers (e.g. Gemini free) allow only a few requests per minute — slow down or add billing.`);
+  }
+  return new Error(`${prefix} ${r.status}${d?': '+d:''}`);
+}
 
 async function callAI(messages,sys){
   const msgs = applyContextWindow(messages, sys); // ← sliding window trim
@@ -1979,7 +2011,7 @@ function loadSampleProject(){
 // ══ INIT ════════════════════════════════════════════════════════════
 hydrate();
 
-tw('SprizzleIDE v2.8.4  |  LIQUID GLASS');
+tw('SprizzleIDE v2.8.5  |  LIQUID GLASS');
 tw('ALERT: This is a free-to-use project. All processing takes place in the GPU and RAM on your device. None of your data is ever stored or sent to my server. For this reason, any files that are not downloaded or pushed to github will be stored in a VERY UNSTABLE cache on your device that can potentially self-destruct after you close or refresh the page.','err');
 tw('If you would like to see more interesting projects like this in the future, please consider donating to my Venmo (@Vani-gaji) or my LTC wallet (MDqV1Dkpa6FXVb6ZHmtZVXX93fMbE7dohZ)');
 tw('Type "help" for commands list. Terminal is case sensitive','info');
