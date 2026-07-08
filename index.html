@@ -1407,7 +1407,6 @@ function isMeteredBackend(){return S.ai.backend==='openai'||S.ai.backend==='anth
 function aiMaxToolSteps(){return isMeteredBackend()?4:AI_TOOL_MAX_STEPS;}
 function aiSleep(ms){return new Promise(r=>setTimeout(r,ms));}
 let aiBusy=false;        // re-entrancy guard: only one generation loop at a time
-let aiCooldownUntil=0;   // set from a 429 Retry-After — block sends until then
 // A single @@READ chunk (and the tool note) must stay well under the context
 // window or a chunk + prompt overflows it — scale both to the live budget.
 function aiReadMaxLines(){return Math.max(30,Math.min(120,Math.floor(effectiveCtxWindow()/48)));}
@@ -1656,7 +1655,6 @@ async function sendAIMessage(){
   // during a tool loop starts a second concurrent loop that shares S.aiHistory
   // (corrupting it) and doubles the request rate. Leave the user's text intact.
   if(aiBusy){aiMsg('system','⏳ Still working on the previous message — please wait for it to finish.');return;}
-  if(Date.now()<aiCooldownUntil){aiMsg('system',`⏳ Rate-limited — please wait ${Math.ceil((aiCooldownUntil-Date.now())/1000)}s before sending again.`);return;}
   aiBusy=true;
   const sel=S.ctx.selection?getsel():null;
   let uc=msg;if(sel)uc+=`\n\nSelected code:\n\`\`\`\n${sel}\n\`\`\``;
@@ -1735,14 +1733,15 @@ async function sendAIMessage(){
 function cleanBaseUrl(u){u=(u||'').trim().replace(/\/+$/,'');u=u.replace(/\/(chat\/completions|api\/chat)$/i,'');return u.replace(/\/+$/,'');}
 function cleanKey(k){return (k||'').replace(/\s+/g,'');}
 // Surface the API's own explanation instead of a bare status code, and treat
-// 429 specially: honour Retry-After and set a cooldown so we stop hammering.
+// 429 specially: explain the limit. We do NOT block further sends — the user
+// can retry whenever they like; a stale client-side countdown was more annoying
+// than useful (it "paused" while the tab was closed).
 async function apiError(prefix,r){
   let d='';try{const j=await r.json();d=j.error?.message||j.message||(typeof j.error==='string'?j.error:'');}catch(e){}
   if(r.status===429){
     const ra=parseInt((r.headers&&r.headers.get&&r.headers.get('retry-after'))||'',10);
-    const waitS=Number.isFinite(ra)&&ra>0?Math.min(ra,120):30;
-    aiCooldownUntil=Date.now()+waitS*1000;
-    return new Error(`${prefix} 429: rate limit / quota exceeded${d?' — '+d:''}. Pausing ${waitS}s before you can send again. Free tiers (e.g. Gemini free) allow only a few requests per minute — slow down or add billing.`);
+    const hint=Number.isFinite(ra)&&ra>0?` The API suggests retrying in ~${Math.min(ra,3600)}s.`:'';
+    return new Error(`${prefix} 429: rate limit / quota exceeded${d?' — '+d:''}.${hint} Free tiers (e.g. Gemini free) allow only a few requests per minute — wait a bit and retry, or add billing.`);
   }
   return new Error(`${prefix} ${r.status}${d?': '+d:''}`);
 }
@@ -2059,7 +2058,7 @@ function loadSampleProject(){
 // ══ INIT ════════════════════════════════════════════════════════════
 hydrate();
 
-tw('SprizzleIDE v2.8.7  |  LIQUID GLASS');
+tw('SprizzleIDE v2.8.8  |  LIQUID GLASS');
 tw('ALERT: This is a free-to-use project. All processing takes place in the GPU and RAM on your device. None of your data is ever stored or sent to my server. For this reason, any files that are not downloaded or pushed to github will be stored in a VERY UNSTABLE cache on your device that can potentially self-destruct after you close or refresh the page.','err');
 tw('If you would like to see more interesting projects like this in the future, please consider donating to my Venmo (@Vani-gaji) or my LTC wallet (MDqV1Dkpa6FXVb6ZHmtZVXX93fMbE7dohZ)');
 tw('Type "help" for commands list. Terminal is case sensitive','info');
