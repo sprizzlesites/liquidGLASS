@@ -1623,6 +1623,31 @@ function buildSys(latestMsg,forceTools){
   return s;
 }
 
+// A capable cloud model with a large context doesn't need the chunked tool
+// loop to edit a file it can already see. That loop costs 3-5 requests and
+// re-sends a growing context each round, which trips free-tier per-minute
+// request/token limits (429). For metered backends we prefer a SINGLE request:
+// inline the whole file, ask for the complete edited file back, apply it. The
+// tool loop stays for local tiny-context models and files too big to inline
+// (paging a preview + "return the whole file" would risk a truncated overwrite).
+function aiSingleShot(){
+  if(!isMeteredBackend())return false;
+  if(S.ctx.project)return false;                 // project-wide work may span files → keep tools
+  if(!S.activeTab)return true;                   // no file, or create-new-file → one shot is fine
+  const c=S.files[S.activeTab]?.content||'';
+  return estimateTokens(c)<=Math.floor(effectiveCtxWindow()*0.25); // only if the WHOLE file fits
+}
+function buildSingleShotSys(){
+  const base=S.ai.systemPrompt||'';const path=S.activeTab;
+  let s=base+`\n\nHOW TO EDIT: apply a change by returning the COMPLETE updated file in ONE fenced block whose opening fence is \`file:\` + the path — never a diff, partial snippet, or placeholder. `+
+    (path?`For the open file use exactly:\n\`\`\`file:${path}\n<entire updated contents of ${path}>\n\`\`\``
+         :`To create a file: \`\`\`file:path/to/file\n<contents>\n\`\`\``)+
+    `\nKeep any explanation to one sentence outside the block. Never tell the user to copy/paste.`;
+  if(S.ctx.file&&path){const c=S.files[path]?.content||'';s+=`\n\nCurrent file ${path} (${lang(path)}, ${c.split('\n').length} lines) — full contents:\n\`\`\`\n${c}\n\`\`\``;}
+  if(S.ctx.errors&&S.problems.length)s+=`\n\nErrors:\n${S.problems.map(p=>`- ${p.message}`).join('\n')}`;
+  return s;
+}
+
 async function sendAIMessage(){
   const inp=document.getElementById('ai-input');const msg=inp.value.trim();if(!msg)return;
   if(!S.aiConnected){aiMsg('system','⚠️ No AI model connected. Go to AI → Configure AI Model.');return;}
@@ -1640,10 +1665,16 @@ async function sendAIMessage(){
   updateCtxTokenBar(); // refresh bar after adding user message
   const th=aiThink();document.getElementById('ai-send').disabled=true;
   try{
+    let r='';
+    if(aiSingleShot()){
+      // ONE request: the model already has the whole file, so it returns the
+      // complete edit directly — no tool round-trips, no growing context.
+      r=stripThink(await callAI(S.aiHistory,buildSingleShotSys()));
+    }else{
     // Agentic loop: the model may issue @@ tool commands to read / search /
     // edit project files chunk by chunk. Each result is fed back to it until
     // it produces a final answer (or the step budget runs out).
-    let r='',steps=0,bounces=0,lastReply=null;const maxSteps=aiMaxToolSteps();
+    let steps=0,bounces=0,lastReply=null;const maxSteps=aiMaxToolSteps();
     while(true){
       // Space out requests to metered APIs so a multi-step loop doesn't burst
       // past a free tier's per-minute limit.
@@ -1670,6 +1701,7 @@ async function sendAIMessage(){
       aiMsg('system','🔧 '+res.note);
       S.aiHistory.push({role:'user',content:'[tool result]\n'+res.output});
       updateCtxTokenBar();
+    }
     }
     S.aiHistory.push({role:'assistant',content:r});
     if(S.ai.autoResetCtx)S.aiHistory=[];
@@ -2027,7 +2059,7 @@ function loadSampleProject(){
 // ══ INIT ════════════════════════════════════════════════════════════
 hydrate();
 
-tw('SprizzleIDE v2.8.6  |  LIQUID GLASS');
+tw('SprizzleIDE v2.8.7  |  LIQUID GLASS');
 tw('ALERT: This is a free-to-use project. All processing takes place in the GPU and RAM on your device. None of your data is ever stored or sent to my server. For this reason, any files that are not downloaded or pushed to github will be stored in a VERY UNSTABLE cache on your device that can potentially self-destruct after you close or refresh the page.','err');
 tw('If you would like to see more interesting projects like this in the future, please consider donating to my Venmo (@Vani-gaji) or my LTC wallet (MDqV1Dkpa6FXVb6ZHmtZVXX93fMbE7dohZ)');
 tw('Type "help" for commands list. Terminal is case sensitive','info');
