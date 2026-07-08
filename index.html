@@ -66,7 +66,7 @@
   .tree-item{display:flex;align-items:center;gap:5px;padding:3px 38px 3px 0;cursor:pointer;color:var(--text-1);font-size:12px;border-radius:3px;user-select:none;position:relative;}
   .tree-item:hover{background:var(--bg-3);}
   .tree-item.active{background:var(--accent-dim);color:var(--text-0);}
-  .tree-item.folder{color:var(--amber);}
+  .tree-item.folder{color:var(--amber);padding-right:74px;}
   .tree-item-icon{width:16px;flex-shrink:0;text-align:center;font-size:12px;}
   .tree-item .ctx-btn{display:flex;gap:3px;position:absolute;right:4px;font-size:10px;color:var(--text-2);background:var(--bg-2);padding:0 2px;border-radius:3px;}
   .tree-item .ctx-btn span{padding:1px 3px;border-radius:3px;}
@@ -947,7 +947,7 @@ function renderTree(){
   let h='';
   Object.keys(folders).sort().forEach(folder=>{
     const open=ftExpanded[folder]!==false;
-    h+=`<div class="tree-item folder" onclick="toggleFolder('${folder}')" oncontextmenu="showCtx(event,'folder','${folder}')"><span class="tree-item-icon">${open?'▼':'▶'}</span><span>📁 ${folder}</span><div class="ctx-btn"><span onclick="event.stopPropagation();newInFolder('${folder}')">+</span></div></div>`;
+    h+=`<div class="tree-item folder" onclick="toggleFolder('${folder}')" oncontextmenu="showCtx(event,'folder','${folder}')"><span class="tree-item-icon">${open?'▼':'▶'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📁 ${folder}</span><div class="ctx-btn"><span onclick="event.stopPropagation();newInFolder('${folder}')" title="New File">+</span><span onclick="event.stopPropagation();newSubfolder('${folder}')" title="New Subfolder">📁+</span><span onclick="event.stopPropagation();delFolder('${folder}')" title="Delete Folder">✕</span></div></div>`;
     if(open)folders[folder].sort().forEach(path=>{const n=path.split('/').pop();h+=treeFileHtml(path,n,14);});
   });
   root.sort().forEach(path=>h+=treeFileHtml(path,path,0));
@@ -985,9 +985,29 @@ function closeTab(path){
 
 // ══ FILE OPS ════════════════════════════════════════════════════════════
 function newFile(){document.getElementById('newfile-name').value='';document.getElementById('newfile-modal').classList.remove('hidden');setTimeout(()=>document.getElementById('newfile-name').focus(),50);}
-async function newFolder(){const n=await askPrompt('New Folder','','Folder name');if(n)mkFile(n+'/.gitkeep','');}
+async function newFolder(){const n=await askPrompt('New Folder','','Folder name');if(n)mkFolderPlaceholder(n);}
 async function newInFolder(f){const n=await askPrompt('New File','','File name');if(n)mkFile(f+'/'+n,'');}
+async function newSubfolder(parent){const n=await askPrompt('New Subfolder','','Subfolder name');if(n)mkFolderPlaceholder(parent+'/'+n);}
 function createNewFile(){const n=document.getElementById('newfile-name').value.trim();if(!n)return;closeModal('newfile-modal');mkFile(n,tpl(n));}
+// Folders are just directory prefixes on file paths, so an empty folder needs
+// a placeholder file — created directly (not via mkFile) so it doesn't hijack
+// the editor into showing a hidden .gitkeep the user never asked to open.
+function mkFolderPlaceholder(path){const p=path.replace(/\/+$/,'')+'/.gitkeep';S.files[p]={content:'',lang:lang(p),modified:false};addGitChange(p,'A');renderTree();}
+async function delFolder(path){
+  if(!await askConfirm(`Delete folder "${path}" and everything inside it?`,'Delete Folder'))return;
+  const prefix=path+'/';
+  const affected=Object.keys(S.files).filter(f=>f.startsWith(prefix));
+  if(!affected.length){tw(`Folder "${path}" is already empty.`,'warn');return;}
+  affected.forEach(f=>{delete S.files[f];const i=S.openTabs.indexOf(f);if(i!==-1)S.openTabs.splice(i,1);addGitChange(f,'D');});
+  delete ftExpanded[path];
+  if(affected.includes(S.activeTab)){
+    S.activeTab=S.openTabs[0]||null;
+    if(S.activeTab)openTab(S.activeTab);
+    else{document.getElementById('welcome').style.display='flex';document.getElementById('editor').classList.add('hidden');}
+  }
+  renderTree();renderTabs();
+  tw(`Deleted folder "${path}" (${affected.length} file${affected.length!==1?'s':''})`,'info');
+}
 function tpl(f){const e=f.split('.').pop().toLowerCase();const t={py:`# ${f}\n\ndef main():\n    print("Hello, World!")\n\nif __name__ == "__main__":\n    main()\n`,js:`// ${f}\n\nfunction main() {\n  console.log("Hello, World!");\n}\n\nmain();\n`,ts:`// ${f}\n\nfunction main(): void {\n  console.log("Hello, World!");\n}\n\nmain();\n`,html:`<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>My App</title>\n  <style>\n    body { font-family: sans-serif; margin: 2rem; background: #f5f7fa; }\n    h1 { color: #6c7fff; }\n  </style>\n</head>\n<body>\n  <h1>Hello, World!</h1>\n  <p>Edit this file and click <strong>Preview</strong> to see your app live!</p>\n  <script>\n    console.log('App loaded!');\n  <\/script>\n</body>\n</html>\n`,css:`/* ${f} */\n\n:root {\n  --primary: #6c7fff;\n}\n\nbody {\n  margin: 0;\n  font-family: sans-serif;\n}\n`,json:`{\n  "name": "project",\n  "version": "1.0.0"\n}\n`,md:`# ${f.replace('.md','')}\n\n## Overview\n\n...\n`,rs:`fn main() {\n    println!("Hello, World!");\n}\n`,go:`package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello, World!")\n}\n`};return t[e]||'';}
 function mkFile(path,content){S.files[path]={content:content||'',lang:lang(path),modified:false};addGitChange(path,'A');renderTree();openTab(path);}
 async function delFile(path){if(!await askConfirm(`Delete "${path}"?`,'Delete'))return;delete S.files[path];const i=S.openTabs.indexOf(path);if(i!==-1)S.openTabs.splice(i,1);if(S.activeTab===path){S.activeTab=S.openTabs[0]||null;if(S.activeTab)openTab(S.activeTab);else{document.getElementById('welcome').style.display='flex';document.getElementById('editor').classList.add('hidden');}}addGitChange(path,'D');renderTree();renderTabs();}
@@ -1913,7 +1933,8 @@ function showCtx(e,type,path){
     {l:'🐙 Push to GitHub',a:()=>ghPushChanges()},
   ]:[
     {l:'+ New File Here',a:()=>newInFolder(path)},
-    {l:'🗑 Delete Folder',a:async()=>{if(await askConfirm(`Delete "${path}"?`,'Delete')){Object.keys(S.files).filter(f=>f.startsWith(path+'/')).forEach(f=>delete S.files[f]);renderTree();}}},
+    {l:'📁 New Subfolder Here',a:()=>newSubfolder(path)},
+    {sep:true},{l:'🗑 Delete Folder',a:()=>delFolder(path)},
   ];
   menu.innerHTML=items.map(i=>i.sep?'<div class="ctx-menu-sep"></div>':`<div class="ctx-menu-item">${i.l}</div>`).join('');
   menu.querySelectorAll('.ctx-menu-item').forEach((el,idx)=>{const item=items.filter(i=>!i.sep)[idx];if(item)el.onclick=()=>{item.a();hideCtx();};});
@@ -1958,7 +1979,7 @@ function loadSampleProject(){
 // ══ INIT ════════════════════════════════════════════════════════════
 hydrate();
 
-tw('SprizzleIDE v2.8.3  |  LIQUID GLASS');
+tw('SprizzleIDE v2.8.4  |  LIQUID GLASS');
 tw('ALERT: This is a free-to-use project. All processing takes place in the GPU and RAM on your device. None of your data is ever stored or sent to my server. For this reason, any files that are not downloaded or pushed to github will be stored in a VERY UNSTABLE cache on your device that can potentially self-destruct after you close or refresh the page.','err');
 tw('If you would like to see more interesting projects like this in the future, please consider donating to my Venmo (@Vani-gaji) or my LTC wallet (MDqV1Dkpa6FXVb6ZHmtZVXX93fMbE7dohZ)');
 tw('Type "help" for commands list. Terminal is case sensitive','info');
