@@ -79,10 +79,13 @@ ROOTFS_TAR="$OUT_DIR/.alpine-rootfs.tar"   # transient; not committed (see .giti
 docker export "$CONTAINER_NAME" -o "$ROOTFS_TAR"
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
-# https://github.com/iximiuz/docker-to-linux/issues/19#issuecomment-1242809707
-# .dockerenv is an export-only artifact of `docker export`, not part of a
-# real filesystem -- drop it so it doesn't show up as a stray file at /.
-tar -f "$ROOTFS_TAR" --delete ".dockerenv" 2>/dev/null || true
+# NB: we deliberately do NOT run `tar --delete .dockerenv` here. `docker
+# export` archives carry PAX/GNU extended headers, and GNU tar's --delete
+# rewrites the archive in a way that mangles those headers -- every later
+# `tar` read then fails with "tar: Skipping to next header / Exiting with
+# failure status" (exit 2), which killed the [4/7] extraction. The stray
+# zero-byte /.dockerenv it was trying to remove is completely harmless inside
+# the guest, so we simply leave it rather than touch the archive at all.
 
 echo "== [4/7] extracting standalone kernel + initramfs =="
 # Also embedded at /boot/ inside the 9p rootfs itself (so vmterm.js could
@@ -90,13 +93,17 @@ echo "== [4/7] extracting standalone kernel + initramfs =="
 # -- see docs/VM-TOOLCHAIN.md and the manifest.json this build produces),
 # but the orchestration plan's manifest contract expects standalone
 # "kernel"/cmdline fields, so we always extract real files for that too.
-BZIMAGE_MEMBER="$(tar -tf "$ROOTFS_TAR" | grep -E '^(\./)?boot/vmlinuz-[^/]+$' | head -n1 || true)"
-INITRD_MEMBER="$(tar -tf "$ROOTFS_TAR" | grep -E '^(\./)?boot/initramfs-[^/]+$' | head -n1 || true)"
+# List the archive ONCE into a variable. Piping `tar -tf` straight into
+# `head` makes head close the pipe early, SIGPIPE-killing tar mid-scan (noisy
+# under `set -o pipefail`); grepping a plain string afterwards avoids that.
+ROOTFS_MEMBERS="$(tar -tf "$ROOTFS_TAR")"
+BZIMAGE_MEMBER="$(printf '%s\n' "$ROOTFS_MEMBERS" | grep -E '^(\./)?boot/vmlinuz-[^/]+$' | head -n1 || true)"
+INITRD_MEMBER="$(printf '%s\n' "$ROOTFS_MEMBERS" | grep -E '^(\./)?boot/initramfs-[^/]+$' | head -n1 || true)"
 
 if [ -z "$BZIMAGE_MEMBER" ] || [ -z "$INITRD_MEMBER" ]; then
   echo "FATAL: could not find boot/vmlinuz-* and/or boot/initramfs-* in the exported rootfs tar." >&2
   echo "Found under boot/:" >&2
-  tar -tf "$ROOTFS_TAR" | grep -E '^(\./)?boot/' >&2 || true
+  printf '%s\n' "$ROOTFS_MEMBERS" | grep -E '^(\./)?boot/' >&2 || true
   exit 1
 fi
 
