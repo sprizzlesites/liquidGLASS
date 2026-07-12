@@ -174,7 +174,11 @@
           opts.bzimage = { url: manifest.kernel };
           opts.cmdline = manifest.cmdline;
           opts.filesystem = { basefs: manifest.fsjson, baseurl: manifest.basefs };
-          opts.memory_size = 256 * 1024 * 1024;
+          // The Alpine "virt" kernel is modular: 9p/virtio live in the initrd,
+          // so root=host9p cannot mount without one (Agent D contract).
+          if (manifest.initrd) opts.initrd = { url: manifest.initrd };
+          if (manifest.bzimage_initrd_from_filesystem) opts.bzimage_initrd_from_filesystem = true;
+          opts.memory_size = (manifest.memory_mb ? manifest.memory_mb : 256) * 1024 * 1024;
           this._mode = 'linux9p';
           term.write('\r\n[vmterm] booting Linux (9p) image…\r\n');
         } else {

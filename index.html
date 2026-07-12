@@ -989,7 +989,10 @@ function openTab(path){
   if(S.ctx.selection){S.ctx.selection=false;document.getElementById('ctx-selection')?.classList.remove('active');updateCtxTokenBar();}
   document.getElementById('welcome').style.display='none';
   const ed=document.getElementById('editor');
-  ed.classList.remove('hidden');ed.value=S.files[path]?.content||'';
+  ed.classList.remove('hidden');
+  const f=S.files[path];
+  if(f&&f.b64){ed.value=`[binary file — ${fileGetBytes(path).length} bytes — use Download]`;ed.readOnly=true;}
+  else{ed.value=f?.content||'';ed.readOnly=false;}
   ed.style.fontSize=S.fontSize+'px';ed.style.whiteSpace=S.wordWrap?'pre-wrap':'pre';
   document.getElementById('file-lang').textContent=lang(path);
   renderTabs();renderTree();ed.focus();renderLineNumbers();
@@ -1001,6 +1004,40 @@ function closeTab(path){
 }
 
 // ══ FILE OPS ════════════════════════════════════════════════════════════
+// Binary-safe S.files: a file is either text (`content` is a UTF-8 string,
+// `b64` falsy) or binary (`content` is a base64 string, `b64:true`,
+// `lang:'binary'`). Every path that reads/writes/exports/renders S.files
+// content must go through these two helpers (or check `.b64` itself) so
+// binary artifacts (VM build output, images, etc.) never get corrupted by
+// being treated as text. See docs/ORCHESTRATION.md §2 "Binary safety".
+function fileGetBytes(path){
+  const f=S.files[path];if(!f)return new Uint8Array(0);
+  if(f.b64){
+    try{
+      const bin=atob(f.content||'');
+      const out=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+      return out;
+    }catch(e){return new Uint8Array(0);}
+  }
+  return new TextEncoder().encode(f.content||'');
+}
+function bytesToBase64(bytes){
+  let bin='';const CHUNK=32768; // chunked to avoid String.fromCharCode.apply stack limits
+  for(let i=0;i<bytes.length;i+=CHUNK)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CHUNK));
+  return btoa(bin);
+}
+function fileSetBytes(path,bytes,extra){
+  let asText=null;
+  if(bytes.length<2*1024*1024 && !bytes.includes(0)){
+    try{asText=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch(e){asText=null;}
+  }
+  const prev=S.files[path]||{};
+  const modified=extra&&'modified' in extra?extra.modified:!!prev.modified;
+  if(asText!==null)S.files[path]={content:asText,lang:lang(path),modified,b64:false};
+  else S.files[path]={content:bytesToBase64(bytes),lang:'binary',modified,b64:true};
+  return S.files[path];
+}
 function newFile(){document.getElementById('newfile-name').value='';document.getElementById('newfile-modal').classList.remove('hidden');setTimeout(()=>document.getElementById('newfile-name').focus(),50);}
 async function newFolder(){const n=await askPrompt('New Folder','','Folder name');if(n)mkFolderPlaceholder(n);}
 async function newInFolder(f){const n=await askPrompt('New File','','File name');if(n)mkFile(f+'/'+n,'');}
@@ -1080,12 +1117,19 @@ function handleFolderOpen(input){const files=Array.from(input.files);let done=0;
     setTimeout(()=>{if(total===0)tw('Drop contained no readable text files.','warn');},800);
   });
 })();
-function saveFile(){if(!S.activeTab)return;S.files[S.activeTab].content=document.getElementById('editor').value;S.files[S.activeTab].modified=false;addGitChange(S.activeTab,'M');renderTabs();renderTree();persist();tw(`Saved: ${S.activeTab}`,'info');}
-async function saveFileAs(){if(!S.activeTab)return;const n=await askPrompt('Save As',S.activeTab,'File name');if(!n)return;S.files[n]={content:document.getElementById('editor').value,lang:lang(n),modified:false};renderTree();renderTabs();openTab(n);persist();}
-function downloadCurrentFile(){if(!S.activeTab){tw('No file is open to download.','warn');return;}const b=new Blob([document.getElementById('editor').value],{type:'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=S.activeTab.split('/').pop();a.click();}
-async function exportProjectZip(){const keys=Object.keys(S.files);if(!keys.length){tw('No files to export.','warn');return;}const zip=new JSZip();keys.forEach(p=>{zip.file(p,S.files[p].content||'');});const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='project.zip';a.click();tw('Exported '+keys.length+' file'+(keys.length!==1?'s':'')+' as project.zip','info');}
+function saveFile(){if(!S.activeTab)return;if(S.files[S.activeTab].b64){tw(`${S.activeTab} is a binary file — nothing to save (use Download).`,'warn');return;}S.files[S.activeTab].content=document.getElementById('editor').value;S.files[S.activeTab].modified=false;addGitChange(S.activeTab,'M');renderTabs();renderTree();persist();tw(`Saved: ${S.activeTab}`,'info');}
+async function saveFileAs(){if(!S.activeTab)return;if(S.files[S.activeTab].b64){tw(`${S.activeTab} is a binary file — "Save As" of the current tab is not supported (use Download).`,'warn');return;}const n=await askPrompt('Save As',S.activeTab,'File name');if(!n)return;S.files[n]={content:document.getElementById('editor').value,lang:lang(n),modified:false};renderTree();renderTabs();openTab(n);persist();}
+function downloadCurrentFile(){if(!S.activeTab){tw('No file is open to download.','warn');return;}const f=S.files[S.activeTab];const bytes=fileGetBytes(S.activeTab);const b=new Blob([bytes],{type:f&&f.b64?'application/octet-stream':'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=S.activeTab.split('/').pop();a.click();}
+// Pure (no DOM) so tests/vm/zip-binary-roundtrip.mjs can require this exact
+// logic against a real JSZip in node without duplicating it — files:
+// {path:{content,b64}} map, ZipCtor: a JSZip class (global JSZip in-browser,
+// require('jszip') in node). Binary-safe: b64 files are handed to JSZip with
+// {base64:true} so it decodes them back to real bytes instead of storing the
+// base64 text verbatim.
+function buildProjectZip(files,ZipCtor){const zip=new ZipCtor();Object.keys(files).forEach(p=>{const f=files[p];zip.file(p,f.content||'',{base64:!!f.b64});});return zip;}
+async function exportProjectZip(){const keys=Object.keys(S.files);if(!keys.length){tw('No files to export.','warn');return;}const zip=buildProjectZip(S.files,JSZip);const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='project.zip';a.click();tw('Exported '+keys.length+' file'+(keys.length!==1?'s':'')+' as project.zip','info');}
 function handleZipImport(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>importZipFromBuffer(ev.target.result);r.readAsArrayBuffer(file);input.value='';}
-async function importZipFromBuffer(buffer){if(typeof JSZip==='undefined'){tw('JSZip not loaded.','warn');return;}try{const zip=await JSZip.loadAsync(buffer);const items=Object.values(zip.files).filter(f=>!f.dir);if(!items.length){tw('ZIP contained no files.','warn');return;}let count=0;for(const item of items){try{const content=await item.async('string');S.files[item.name]={content,lang:lang(item.name),modified:false};count++;}catch(e){}}renderTree();if(count===1)openTab(items[0].name);else tw('Imported '+count+' file'+(count!==1?'s':'')+' from ZIP','info');}catch(e){tw('ZIP import failed: '+e.message,'err');}}
+async function importZipFromBuffer(buffer){if(typeof JSZip==='undefined'){tw('JSZip not loaded.','warn');return;}try{const zip=await JSZip.loadAsync(buffer);const items=Object.values(zip.files).filter(f=>!f.dir);if(!items.length){tw('ZIP contained no files.','warn');return;}let count=0;for(const item of items){try{const bytes=await item.async('uint8array');fileSetBytes(item.name,bytes);count++;}catch(e){}}renderTree();if(count===1)openTab(items[0].name);else tw('Imported '+count+' file'+(count!==1?'s':'')+' from ZIP','info');}catch(e){tw('ZIP import failed: '+e.message,'err');}}
 function collapseAll(){Object.keys(ftExpanded).forEach(k=>ftExpanded[k]=false);renderTree();}
 
 // ══ EDITOR ════════════════════════════════════════════════════════════
@@ -1144,7 +1188,7 @@ editor.addEventListener('scroll',()=>{renderLineNumbers();if(searchOn&&_searchMa
 editor.addEventListener('input',()=>{if(S.activeTab){S.files[S.activeTab].modified=true;renderTabs();renderTree();debouncedPersist();renderLineNumbers();if(searchOn){const q=document.getElementById('search-input').value;if(q){_searchMatches=[...editor.value.matchAll(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'))];_searchIdx=Math.min(_searchIdx,Math.max(0,_searchMatches.length-1));document.getElementById('search-count').textContent=_searchMatches.length?`${_searchIdx+1} of ${_searchMatches.length}`:'No matches';}else _searchMatches=[];renderSearchHighlight();}}});
 let _persistTimer;function debouncedPersist(){clearTimeout(_persistTimer);_persistTimer=setTimeout(persist,2000);}
 editor.addEventListener('keydown',e=>{
-  if(e.key==='Tab'){e.preventDefault();const s=editor.selectionStart;editor.value=editor.value.substring(0,s)+'  '+editor.value.substring(editor.selectionEnd);editor.selectionStart=editor.selectionEnd=s+2;if(S.activeTab)S.files[S.activeTab].modified=true;}
+  if(e.key==='Tab'){e.preventDefault();if(S.activeTab&&S.files[S.activeTab]?.b64)return;const s=editor.selectionStart;editor.value=editor.value.substring(0,s)+'  '+editor.value.substring(editor.selectionEnd);editor.selectionStart=editor.selectionEnd=s+2;if(S.activeTab)S.files[S.activeTab].modified=true;}
   if(e.ctrlKey&&e.key==='s'){e.preventDefault();saveFile();}
   if(e.ctrlKey&&e.key==='f'){e.preventDefault();toggleSearch();}
   if(e.key==='F5'){e.preventDefault();runCode();}
@@ -1196,8 +1240,8 @@ function buildPreview(){
   const frame=document.getElementById('preview-frame');
   if(!entry){frame.srcdoc='<html><body style="font-family:sans-serif;padding:2rem;color:#555;text-align:center;"><div style="font-size:3rem;margin-bottom:1rem;">🌐</div><h2>No HTML file found</h2><p>Create an <code>.html</code> file to preview it here.</p></body></html>';document.getElementById('preview-title').textContent='Live Preview — no HTML file';document.getElementById('preview-url-bar').textContent='(no HTML file)';return;}
   let html=S.files[entry]?.content||'';
-  html=html.replace(/<link[^>]+href=["']([^"']+\.css)["'][^>]*\/?>/gi,(match,href)=>{const cssFile=S.files[href]||S.files[href.replace('./','')]||S.files[entry.split('/').slice(0,-1).concat(href).join('/')];return cssFile?`<style>/* ${href} */\n${cssFile.content}\n</style>`:match;});
-  html=html.replace(/<script([^>]*)src=["']([^"']+)["']([^>]*)><\/script>/gi,(match,pre,src,post)=>{if(/^https?:|^\/\//.test(src))return match;const jsFile=S.files[src]||S.files[src.replace('./','')]||S.files[entry.split('/').slice(0,-1).concat(src).join('/')];return jsFile?`<script${pre}${post}>\n/* ${src} */\n${jsFile.content}\n<\/script>`:match;});
+  html=html.replace(/<link[^>]+href=["']([^"']+\.css)["'][^>]*\/?>/gi,(match,href)=>{const cssFile=S.files[href]||S.files[href.replace('./','')]||S.files[entry.split('/').slice(0,-1).concat(href).join('/')];return cssFile&&!cssFile.b64?`<style>/* ${href} */\n${cssFile.content}\n</style>`:match;});
+  html=html.replace(/<script([^>]*)src=["']([^"']+)["']([^>]*)><\/script>/gi,(match,pre,src,post)=>{if(/^https?:|^\/\//.test(src))return match;const jsFile=S.files[src]||S.files[src.replace('./','')]||S.files[entry.split('/').slice(0,-1).concat(src).join('/')];return jsFile&&!jsFile.b64?`<script${pre}${post}>\n/* ${src} */\n${jsFile.content}\n<\/script>`:match;});
   if(previewUrl)URL.revokeObjectURL(previewUrl);
   const blob=new Blob([html],{type:'text/html'});previewUrl=URL.createObjectURL(blob);frame.src=previewUrl;
   document.getElementById('preview-title').textContent=`Live Preview — ${entry}`;document.getElementById('preview-url-bar').textContent=`blob:${entry}`;
@@ -1215,7 +1259,7 @@ document.getElementById('search-input').addEventListener('keydown',e=>{if(e.key=
 function searchNext(){if(!_searchMatches.length)return;_searchIdx=(_searchIdx+1)%_searchMatches.length;scrollToMatch();}
 function searchPrev(){if(!_searchMatches.length)return;_searchIdx=(_searchIdx-1+_searchMatches.length)%_searchMatches.length;scrollToMatch();}
 function scrollToMatch(){const m=_searchMatches[_searchIdx];if(!m)return;const cs=getComputedStyle(editor);const lh=parseFloat(cs.lineHeight)||20;const linesBefore=editor.value.substring(0,m.index).split('\n').length-1;editor.scrollTop=Math.max(0,linesBefore*lh+(parseFloat(cs.paddingTop)||0)-editor.clientHeight/2);document.getElementById('search-count').textContent=`${_searchIdx+1} of ${_searchMatches.length}`;renderSearchHighlight();}
-function globalSearch(q){const r=document.getElementById('search-results');if(!q){r.innerHTML='';return;}let h='';Object.entries(S.files).forEach(([path,file])=>{const lines=file.content.split('\n');const ms=[];lines.forEach((line,i)=>{if(line.toLowerCase().includes(q.toLowerCase())){const hi=line.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark>${m}</mark>`);ms.push({n:i+1,t:hi});}});if(ms.length){h+=`<div class="search-result-file">${path} (${ms.length})</div>`;ms.slice(0,5).forEach(m=>{h+=`<div class="search-result-line" onclick="openTab('${path}')"><span class="search-result-num">${m.n}</span><span style="font-size:12px;">${m.t}</span></div>`;});}});r.innerHTML=h||'<div style="color:var(--text-2);font-size:12px;padding:8px;">No results</div>';}
+function globalSearch(q){const r=document.getElementById('search-results');if(!q){r.innerHTML='';return;}let h='';Object.entries(S.files).forEach(([path,file])=>{if(file.b64)return;const lines=file.content.split('\n');const ms=[];lines.forEach((line,i)=>{if(line.toLowerCase().includes(q.toLowerCase())){const hi=line.replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark>${m}</mark>`);ms.push({n:i+1,t:hi});}});if(ms.length){h+=`<div class="search-result-file">${path} (${ms.length})</div>`;ms.slice(0,5).forEach(m=>{h+=`<div class="search-result-line" onclick="openTab('${path}')"><span class="search-result-num">${m.n}</span><span style="font-size:12px;">${m.t}</span></div>`;});}});r.innerHTML=h||'<div style="color:var(--text-2);font-size:12px;padding:8px;">No results</div>';}
 
 // ══ TERMINAL ════════════════════════════════════════════════════════════
 const termEl=document.getElementById('terminal');
@@ -1229,7 +1273,7 @@ const tc={
   pwd:()=>tw(fakeFS.cwd),clear:()=>clearTerminal(),
   help:()=>tw('Commands: ls, pwd, clear, echo, cat, touch, rm, git, npm, python, node, pip, cargo','info'),
   echo:a=>tw(a.join(' ')),
-  cat:a=>{const f=S.files[a[0]];tw(f?f.content:`cat: ${a[0]}: No such file`);},
+  cat:a=>{const f=S.files[a[0]];tw(f?(f.b64?`cat: ${a[0]}: binary file (${fileGetBytes(a[0]).length} bytes) — use Download`:f.content):`cat: ${a[0]}: No such file`);},
   touch:a=>{if(a[0]){S.files[a[0]]={content:'',lang:lang(a[0]),modified:false};renderTree();tw(`Created: ${a[0]}`);}},
   rm:a=>{if(a[0]&&S.files[a[0]])delFile(a[0]);else tw(`rm: cannot remove '${a[0]}'`,'err');},
   git:a=>gitCmd(a[0]||'status'),
@@ -1275,7 +1319,7 @@ function filterRepos(q){renderRepos(S.ghRepos.filter(r=>r.full_name.toLowerCase(
 async function ghSelectRepo(full,branch){S.gh.currentRepo=full;S.gh.currentBranch=branch||S.gh.branch;document.getElementById('gh-current-repo').textContent=`${full} @ ${S.gh.currentBranch}`;document.getElementById('git-branch').textContent=S.gh.currentBranch;renderRepos(S.ghRepos);try{const br=await ghGet(`/repos/${full}/branches`);document.getElementById('gh-branches').innerHTML=br.map(b=>`<span class="gh-branch-chip${b.name===S.gh.currentBranch?' active':''}" onclick="ghSelectRepo('${full}','${b.name}')">${b.name}</span>`).join('');}catch(e){}try{const cm=await ghGet(`/repos/${full}/commits?per_page=5&sha=${S.gh.currentBranch}`);document.getElementById('gh-commits').innerHTML=cm.map(c=>`<div class="commit-item"><div class="commit-msg">${esc(c.commit.message.split('\n')[0])}</div><div class="commit-meta">${c.commit.author.name} · ${new Date(c.commit.author.date).toLocaleDateString()}</div></div>`).join('');}catch(e){}tw(`GitHub: selected ${full} @ ${S.gh.currentBranch}`,'info');persist();}
 function ghCloneRepo(){if(!S.gh.token){openGitHubConfig();return;}if(S.gh.currentRepo)document.getElementById('clone-repo').value=S.gh.currentRepo;document.getElementById('clone-branch').value=S.gh.currentBranch||'main';document.getElementById('clone-filter').value='';document.getElementById('clone-modal').classList.remove('hidden');}
 async function doCloneRepo(){const repo=document.getElementById('clone-repo').value.trim();const branch=document.getElementById('clone-branch').value.trim()||'main';const filter=document.getElementById('clone-filter').value.trim();if(!repo){tw('Enter a repo (owner/repo).','warn');return;}closeModal('clone-modal');tw(`Fetching file tree for ${repo}@${branch}...`,'info');try{const tree=await ghGet(`/repos/${repo}/git/trees/${branch}?recursive=1`);const textExts=/\.(js|jsx|ts|tsx|py|html|css|json|md|txt|yaml|yml|toml|rs|go|java|cpp|c|cs|php|rb|sh|xml|vue|svelte|gitignore|env\.example)$/i;let files=tree.tree.filter(f=>f.type==='blob'&&textExts.test(f.path));if(filter){const pats=filter.split(',').map(p=>p.trim());files=files.filter(f=>pats.some(p=>p.endsWith('/')?f.path.startsWith(p):new RegExp('^'+p.replace('.','\\.').replace('*','.*')+'$').test(f.path.split('/').pop())));}files=files.slice(0,50);tw(`Loading ${files.length} files...`,'info');for(const file of files){try{const blob=await ghGet(`/repos/${repo}/contents/${file.path}?ref=${branch}`);S.files[file.path]={content:decodeURIComponent(escape(atob(blob.content.replace(/\n/g,'')))),lang:lang(file.path),modified:false};}catch(e){tw(`Skip: ${file.path}`,'warn');}}S.gh.currentRepo=repo;S.gh.currentBranch=branch;document.getElementById('sidebar-project-name').textContent=repo.split('/')[1].toUpperCase();document.getElementById('git-branch').textContent=branch;renderTree();const readme=Object.keys(S.files).find(f=>/readme/i.test(f))||Object.keys(S.files)[0];if(readme)openTab(readme);tw(`✓ Loaded ${repo}: ${Object.keys(S.files).length} files`,'info');setActivity('files');persist();}catch(e){tw(`Clone failed: ${e.message}`,'err');}}
-async function ghPushChanges(){if(!S.gh.token){openGitHubConfig();return;}if(!S.gh.currentRepo){tw('Select a repository in the GitHub panel first.','warn');setActivity('github');return;}const modified=S.gitChanges.filter(c=>c.status==='A'||c.status==='M').map(c=>[c.path,S.files[c.path]]).filter(([,f])=>f);if(!modified.length){tw('Nothing to push (no modified files)','warn');return;}const msg=await askPrompt(`Commit message (pushing ${modified.length} file(s))`,'Update from SprizzleIDE','Commit message');if(!msg)return;switchPanelTabById('terminal');tw(`Pushing ${modified.length} file(s) to ${S.gh.currentRepo}@${S.gh.currentBranch}...`,'info');const committer={name:S.gh.commitName||'SprizzleIDE',email:S.gh.commitEmail||'sprizide@noreply.github.com'};for(const[path,file]of modified){try{let sha;try{const ex=await ghGet(`/repos/${S.gh.currentRepo}/contents/${path}?ref=${S.gh.currentBranch}`);sha=ex.sha;}catch(e){}const body={message:msg,content:btoa(unescape(encodeURIComponent(file.content))),branch:S.gh.currentBranch,committer};if(sha)body.sha=sha;await ghPut(`/repos/${S.gh.currentRepo}/contents/${path}`,body);file.modified=false;tw(`  ✓ ${path}`,'info');}catch(e){tw(`  ✗ ${path}: ${e.message}`,'err');}}renderTabs();renderTree();const pushed=modified.map(([p])=>p);S.gitChanges=S.gitChanges.filter(c=>!pushed.includes(c.path));document.getElementById('git-changes').innerHTML=S.gitChanges.map(c=>`<div class="git-change"><span class="git-status ${c.status}">${c.status}</span><span class="git-file">${c.path}</span></div>`).join('');tw(`✓ Pushed to ${S.gh.currentRepo}@${S.gh.currentBranch}`,'info');ghSelectRepo(S.gh.currentRepo,S.gh.currentBranch);}
+async function ghPushChanges(){if(!S.gh.token){openGitHubConfig();return;}if(!S.gh.currentRepo){tw('Select a repository in the GitHub panel first.','warn');setActivity('github');return;}const modified=S.gitChanges.filter(c=>c.status==='A'||c.status==='M').map(c=>[c.path,S.files[c.path]]).filter(([,f])=>f);if(!modified.length){tw('Nothing to push (no modified files)','warn');return;}const msg=await askPrompt(`Commit message (pushing ${modified.length} file(s))`,'Update from SprizzleIDE','Commit message');if(!msg)return;switchPanelTabById('terminal');tw(`Pushing ${modified.length} file(s) to ${S.gh.currentRepo}@${S.gh.currentBranch}...`,'info');const committer={name:S.gh.commitName||'SprizzleIDE',email:S.gh.commitEmail||'sprizide@noreply.github.com'};for(const[path,file]of modified){try{let sha;try{const ex=await ghGet(`/repos/${S.gh.currentRepo}/contents/${path}?ref=${S.gh.currentBranch}`);sha=ex.sha;}catch(e){}const body={message:msg,content:file.b64?file.content:btoa(unescape(encodeURIComponent(file.content))),branch:S.gh.currentBranch,committer};if(sha)body.sha=sha;await ghPut(`/repos/${S.gh.currentRepo}/contents/${path}`,body);file.modified=false;tw(`  ✓ ${path}`,'info');}catch(e){tw(`  ✗ ${path}: ${e.message}`,'err');}}renderTabs();renderTree();const pushed=modified.map(([p])=>p);S.gitChanges=S.gitChanges.filter(c=>!pushed.includes(c.path));document.getElementById('git-changes').innerHTML=S.gitChanges.map(c=>`<div class="git-change"><span class="git-status ${c.status}">${c.status}</span><span class="git-file">${c.path}</span></div>`).join('');tw(`✓ Pushed to ${S.gh.currentRepo}@${S.gh.currentBranch}`,'info');ghSelectRepo(S.gh.currentRepo,S.gh.currentBranch);}
 async function ghPullChanges(){if(!S.gh.currentRepo){tw('Select a repository first.','warn');return;}if(!await askConfirm('Pull will overwrite local files with the remote version. Continue?','Pull'))return;document.getElementById('clone-repo').value=S.gh.currentRepo;document.getElementById('clone-branch').value=S.gh.currentBranch;document.getElementById('clone-filter').value='';await doCloneRepo();}
 function ghCreateRepo(){if(!S.gh.token){openGitHubConfig();return;}document.getElementById('new-repo-name').value='';document.getElementById('create-repo-modal').classList.remove('hidden');}
 async function doCreateRepo(){const name=document.getElementById('new-repo-name').value.trim();if(!name){tw('Enter a repo name.','warn');return;}closeModal('create-repo-modal');tw(`Creating repo: ${name}...`,'info');try{const repo=await ghPost('/user/repos',{name,description:document.getElementById('new-repo-desc').value,private:document.getElementById('new-repo-private').value==='true',auto_init:document.getElementById('new-repo-init').checked});tw(`✓ Created: ${repo.full_name}`,'info');tw(`  ${repo.html_url}`,'info');S.gh.currentRepo=repo.full_name;S.gh.currentBranch=repo.default_branch||'main';await ghLoadRepos();ghSelectRepo(repo.full_name,repo.default_branch||'main');}catch(e){tw(`Failed: ${e.message}`,'err');}}
@@ -1501,12 +1545,13 @@ function parseAIToolCall(text){
 
 function execAITool(t){
   if(t.cmd==='LIST'){
-    const rows=Object.entries(S.files).map(([p,f])=>`${p} — ${(f.content.match(/\n/g)||[]).length+1} lines`);
+    const rows=Object.entries(S.files).map(([p,f])=>f.b64?`${p} — binary, ${fileGetBytes(p).length} bytes`:`${p} — ${(f.content.match(/\n/g)||[]).length+1} lines`);
     return {note:'listed project files',output:rows.length?rows.join('\n'):'(project is empty)'};
   }
   if(t.cmd==='SEARCH'){
     const hits=[],term=t.term.toLowerCase();
     for(const [p,f] of Object.entries(S.files)){
+      if(f.b64)continue;
       const lines=f.content.split('\n');
       for(let i=0;i<lines.length&&hits.length<20;i++){if(lines[i].toLowerCase().includes(term))hits.push(`${p}:${i+1}: ${lines[i].trim().slice(0,120)}`);}
       if(hits.length>=20)break;
@@ -1515,6 +1560,7 @@ function execAITool(t){
   }
   const path=aiResolvePath(t.path);
   if(!path)return {note:`${t.cmd.toLowerCase()} failed — file not found`,output:`ERROR: file "${t.path}" not found. Use @@LIST to see available files.`};
+  if(S.files[path].b64)return {note:`${t.cmd.toLowerCase()} failed — binary file`,output:`ERROR: ${path} is a binary file and cannot be read or edited as text. Use Download to inspect it.`};
   const lines=S.files[path].content.split('\n');
   if(t.cmd==='READ'){
     const rl=aiReadMaxLines();
@@ -1579,7 +1625,7 @@ function renderBlockCard(b,msgIndex,blockIdx){
 function copyAIBlock(msgIndex,blockIdx){const b=S.aiBlocks?.[msgIndex]?.[blockIdx];if(!b)return;navigator.clipboard.writeText(b.code);}
 function applyAIBlock(msgIndex,blockIdx,mode){
   const b=S.aiBlocks?.[msgIndex]?.[blockIdx];if(!b)return;
-  if(mode==='replace'){if(!S.activeTab){tw('No file is open to apply this to.','warn');return;}S.files[S.activeTab].content=b.code;S.files[S.activeTab].modified=true;if(S.activeTab){editor.value=b.code;}addGitChange(S.activeTab,'M');renderTabs();renderTree();tw(`✓ Applied AI code to ${S.activeTab}`,'info');}
+  if(mode==='replace'){if(!S.activeTab){tw('No file is open to apply this to.','warn');return;}if(S.files[S.activeTab].b64){tw(`${S.activeTab} is a binary file — cannot apply text edits.`,'warn');return;}S.files[S.activeTab].content=b.code;S.files[S.activeTab].modified=true;if(S.activeTab){editor.value=b.code;}addGitChange(S.activeTab,'M');renderTabs();renderTree();tw(`✓ Applied AI code to ${S.activeTab}`,'info');}
   else if(mode==='insert'){if(!S.activeTab){tw('No file is open to insert into.','warn');return;}insertAtCursor(b.code);tw(`✓ Inserted AI code into ${S.activeTab}`,'info');}
   else if(mode==='newfile'){const guess=guessFileName(b.langTag);document.getElementById('ai-savefile-name').value=guess;_pendingAISaveBlock=b;document.getElementById('ai-savefile-modal').classList.remove('hidden');setTimeout(()=>{const inp=document.getElementById('ai-savefile-name');inp.focus();inp.select();},50);}
 }
@@ -1587,7 +1633,7 @@ let _pendingAISaveBlock=null;
 function confirmAISaveFile(){const path=document.getElementById('ai-savefile-name').value.trim();if(!path||!_pendingAISaveBlock)return;mkFileFromAI(path,_pendingAISaveBlock.code);tw(`✓ Created file ${path} from AI code`,'info');_pendingAISaveBlock=null;closeModal('ai-savefile-modal');}
 function guessFileName(tag){const m={js:'script.js',javascript:'script.js',ts:'script.ts',typescript:'script.ts',py:'script.py',python:'script.py',html:'index.html',css:'styles.css',json:'data.json',md:'notes.md',rust:'main.rs',rs:'main.rs',go:'main.go',java:'Main.java',cpp:'main.cpp',c:'main.c',sh:'script.sh',bash:'script.sh'};return m[(tag||'').toLowerCase()]||'newfile.txt';}
 function mkFileFromAI(path,content){const existed=!!S.files[path];S.files[path]={content,lang:lang(path),modified:true};addGitChange(path,existed?'M':'A');renderTree();if(S.activeTab===path){editor.value=content;}}
-function insertAtCursor(snippet){if(!S.activeTab){tw('AI tried to insert code but no file is open.','warn');return;}const start=editor.selectionStart,end=editor.selectionEnd;editor.value=editor.value.substring(0,start)+snippet+editor.value.substring(end);editor.selectionStart=editor.selectionEnd=start+snippet.length;S.files[S.activeTab].content=editor.value;S.files[S.activeTab].modified=true;renderTabs();renderTree();}
+function insertAtCursor(snippet){if(!S.activeTab){tw('AI tried to insert code but no file is open.','warn');return;}if(S.files[S.activeTab].b64){tw(`${S.activeTab} is a binary file — cannot insert text.`,'warn');return;}const start=editor.selectionStart,end=editor.selectionEnd;editor.value=editor.value.substring(0,start)+snippet+editor.value.substring(end);editor.selectionStart=editor.selectionEnd=start+snippet.length;S.files[S.activeTab].content=editor.value;S.files[S.activeTab].modified=true;renderTabs();renderTree();}
 function replaceSelectionOrFile(snippet){if(!S.activeTab){tw('AI tried to replace code but no file is open.','warn');return;}const start=editor.selectionStart,end=editor.selectionEnd;if(start===end){editor.value=snippet;editor.selectionStart=0;editor.selectionEnd=snippet.length;}else{editor.value=editor.value.substring(0,start)+snippet+editor.value.substring(end);editor.selectionStart=start;editor.selectionEnd=start+snippet.length;}S.files[S.activeTab].content=editor.value;S.files[S.activeTab].modified=true;renderTabs();renderTree();}
 
 // ══ AI ════════════════════════════════════════════════════════════════
@@ -1598,7 +1644,7 @@ function toggleCtx(k){S.ctx[k]=!S.ctx[k];document.getElementById('ctx-'+k).class
 function projectTreeText(budgetTok){
   const paths=Object.keys(S.files).sort();
   if(!paths.length)return '';
-  const rows=paths.map(p=>`${p} (${(S.files[p].content.match(/\n/g)||[]).length+1} ln)`);
+  const rows=paths.map(p=>S.files[p].b64?`${p} (binary, ${fileGetBytes(p).length} bytes)`:`${p} (${(S.files[p].content.match(/\n/g)||[]).length+1} ln)`);
   let body='',shown=0;
   for(const r of rows){if(estimateTokens(body+'\n'+r)>budgetTok)break;body+=(body?'\n':'')+r;shown++;}
   const more=rows.length-shown;
@@ -1617,7 +1663,9 @@ function buildSys(latestMsg,forceTools){
   const withTools=forceTools||S.ctx.project||aiMsgNeedsTools(latestMsg);
   let s=base+(withTools?buildToolsSystemNote():'');
   if(withTools&&S.ctx.project)s+=projectTreeText(Math.floor(win*0.2));
-  if(withTools&&S.ctx.file&&S.activeTab){
+  if(withTools&&S.ctx.file&&S.activeTab&&S.files[S.activeTab]?.b64){
+    s+=`\n\nOpen file ${S.activeTab} is a binary file (${fileGetBytes(S.activeTab).length} bytes) — content omitted.`;
+  }else if(withTools&&S.ctx.file&&S.activeTab){
     const c=S.files[S.activeTab]?.content||'';
     const lines=c.split('\n');
     const inlineBudget=Math.floor(win*0.25); // the file must never dominate
@@ -1649,6 +1697,7 @@ function aiSingleShot(){
   if(!isMeteredBackend())return false;
   if(S.ctx.project)return false;                 // project-wide work may span files → keep tools
   if(!S.activeTab)return true;                   // no file, or create-new-file → one shot is fine
+  if(S.files[S.activeTab]?.b64)return false;      // binary file — never inlined, use tool loop
   const c=S.files[S.activeTab]?.content||'';
   return estimateTokens(c)<=Math.floor(effectiveCtxWindow()*0.25); // only if the WHOLE file fits
 }
@@ -1658,7 +1707,8 @@ function buildSingleShotSys(){
     (path?`For the open file use exactly:\n\`\`\`file:${path}\n<entire updated contents of ${path}>\n\`\`\``
          :`To create a file: \`\`\`file:path/to/file\n<contents>\n\`\`\``)+
     `\nKeep any explanation to one sentence outside the block. Never tell the user to copy/paste.`;
-  if(S.ctx.file&&path){const c=S.files[path]?.content||'';s+=`\n\nCurrent file ${path} (${lang(path)}, ${c.split('\n').length} lines) — full contents:\n\`\`\`\n${c}\n\`\`\``;}
+  if(S.ctx.file&&path&&S.files[path]?.b64){s+=`\n\nCurrent file ${path} is a binary file (${fileGetBytes(path).length} bytes) — full contents omitted.`;}
+  else if(S.ctx.file&&path){const c=S.files[path]?.content||'';s+=`\n\nCurrent file ${path} (${lang(path)}, ${c.split('\n').length} lines) — full contents:\n\`\`\`\n${c}\n\`\`\``;}
   if(S.ctx.errors&&S.problems.length)s+=`\n\nErrors:\n${S.problems.map(p=>`- ${p.message}`).join('\n')}`;
   return s;
 }
@@ -2228,5 +2278,7 @@ updateCtxTokenBar(); // ← initial bar render
   setTimeout(attemptHide,600);
 })();
 </script>
+<!-- VST Cloud Build (self-registers into the Run menu; safe no-op if menu absent) -->
+<script src="vst/vstcloud.js" defer></script>
 </body>
 </html>
