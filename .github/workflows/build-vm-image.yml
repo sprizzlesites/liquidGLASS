@@ -1,0 +1,129 @@
+name: Build VM Toolchain Image
+
+# Builds the Alpine Linux i686 toolchain image used by SprizzleIDE's
+# in-browser "VM" terminal (v86 9p guest filesystem), boots it headlessly to
+# prove the compile toolchain actually works, and publishes vm/image/*.
+#
+# This CANNOT run in the project's local dev sandbox (the Alpine CDN is
+# blocked by that sandbox's network policy) -- see docs/ORCHESTRATION.md
+# section 2 "Locked architecture" and docs/VM-TOOLCHAIN.md. GitHub-hosted
+# runners have open network + Docker, so the whole pipeline lives here.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [fullterminal]
+    paths:
+      - 'tools/build-image/**'
+      - '.github/workflows/build-vm-image.yml'
+
+permissions:
+  contents: write
+
+# Never run two publishes to the same branch concurrently.
+concurrency:
+  group: build-vm-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js (for the boot smoke test)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # CI-ONLY ASSUMPTION: GitHub-hosted ubuntu-latest runners are x86_64
+      # and ship Docker Engine usable without sudo. `--platform linux/386`
+      # runs natively on the x86_64 host (no QEMU/binfmt needed -- 386 is
+      # the same CPU family as amd64) but this step fails fast with a clear
+      # message if that assumption is ever wrong for a given runner image.
+      - name: Sanity-check Docker can run linux/386 containers natively
+        run: |
+          docker info
+          docker run --rm --platform linux/386 i386/alpine:3.19 uname -m
+
+      - name: Build Alpine i686 toolchain rootfs + v86 9p filesystem assets
+        run: |
+          chmod +x tools/build-image/build.sh
+          tools/build-image/build.sh
+
+      - name: Boot smoke test (drives gcc/nasm/vst2, writes vm/image/manifest.json)
+        run: node tests/vm/boot-linux-smoke.mjs
+
+      - name: Size report & publish-mode decision
+        id: sizecheck
+        run: |
+          set -euo pipefail
+          MAXFILE=$(find vm/image -type f -printf '%s\n' | sort -rn | head -n1)
+          TOTAL=$(du -sb vm/image | cut -f1)
+          FILECOUNT=$(find vm/image -type f | wc -l)
+          echo "largest single file: $MAXFILE bytes"
+          echo "total vm/image size: $TOTAL bytes"
+          echo "file count: $FILECOUNT"
+          LIMIT_PER_FILE=$((90*1024*1024))
+          LIMIT_TOTAL=$((300*1024*1024))
+          if [ "$MAXFILE" -lt "$LIMIT_PER_FILE" ] && [ "$TOTAL" -lt "$LIMIT_TOTAL" ]; then
+            echo "decision: commit vm/image/* directly to git"
+            echo "publish=git" >> "$GITHUB_OUTPUT"
+          else
+            echo "decision: image too large for git -- packing flat dir into a Release asset"
+            echo "publish=release" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish - commit vm/image/* to this branch
+        if: steps.sizecheck.outputs.publish == 'git'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add vm/image/bzimage.bin vm/image/initramfs.img vm/image/alpine-fs.json vm/image/alpine-rootfs-flat vm/image/manifest.json
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+          else
+            git commit \
+              -m "Build VM toolchain image (linux9p) [skip ci]" \
+              -m "Automated build via .github/workflows/build-vm-image.yml (tools/build-image/build.sh + tests/vm/boot-linux-smoke.mjs). See vm/image/manifest.json for recorded toolchain capabilities."
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+
+      # Fallback path for when alpine-rootfs-flat/ (the per-file, sha256-
+      # deduplicated 9p chunk directory) is too large to live comfortably in
+      # git history. The small metadata files (kernel, initrd, fs.json,
+      # manifest) are still committed directly -- only the bulk chunk
+      # directory moves to a Release asset. This is intentionally NOT the
+      # default path; see docs/VM-TOOLCHAIN.md for the size-vs-git tradeoff.
+      - name: Publish - Release asset (image too large for git)
+        if: steps.sizecheck.outputs.publish == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          which zstd || (sudo apt-get update -y && sudo apt-get install -y zstd)
+
+          tar -C vm/image -cf - alpine-rootfs-flat | zstd -19 -T0 -o alpine-rootfs.tar.zst
+          ls -lh alpine-rootfs.tar.zst
+
+          gh release view vm-image-latest >/dev/null 2>&1 && gh release delete vm-image-latest --yes --cleanup-tag || true
+          gh release create vm-image-latest \
+            --title "VM toolchain image (latest)" \
+            --notes "Automated build from .github/workflows/build-vm-image.yml. alpine-rootfs.tar.zst must be unpacked into vm/image/alpine-rootfs-flat/ before use -- see vm/image/manifest.json 'notes' and docs/VM-TOOLCHAIN.md." \
+            alpine-rootfs.tar.zst vm/image/bzimage.bin vm/image/initramfs.img vm/image/alpine-fs.json vm/image/manifest.json
+
+          python3 tools/build-image/mark_packed_manifest.py
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add vm/image/bzimage.bin vm/image/initramfs.img vm/image/alpine-fs.json vm/image/manifest.json
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+          else
+            git commit -m "Build VM toolchain image (linux9p-packed) [skip ci]"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
