@@ -4,3 +4,8 @@
 # copy/v86 used only to borrow tools/fs2json.py + tools/copy-to-sha256.py.
 _context/
 _v86-ref/
+
+# Python bytecode cache from locally running mark_packed_manifest.py /
+# py_compile during validation -- never intentional to commit.
+__pycache__/
+*.pyc

@@ -154,7 +154,12 @@ emulator.add_listener('serial0-output-byte', (byte) => {
 });
 
 function evaluate(segment) {
-  const hasGcc = /gcc \(Alpine/i.test(segment) || /gcc version \d/i.test(segment);
+  // Alpine's gcc package identifies itself as either "gcc (Alpine ...)" or
+  // "cc (Alpine ...)" in `--version` output depending on how the driver
+  // binary resolves its own program name; accept either, plus a generic
+  // "gcc version N" fallback in case the banner format ever changes upstream.
+  const hasGcc = /\b(?:gcc|cc)\s*\(Alpine[^)]*\)\s+\d+\.\d+/i.test(segment) ||
+    /gcc version \d/i.test(segment);
   const hasNasm = /NASM version \d/i.test(segment);
   const rc42 = /\bRC=42\b/.test(segment);
   const asm64Ok = /\bA64=OK\b/.test(segment);
