@@ -181,6 +181,7 @@
           opts.memory_size = (manifest.memory_mb ? manifest.memory_mb : 256) * 1024 * 1024;
           this._mode = 'linux9p';
           term.write('\r\n[vmterm] booting Linux (9p) image…\r\n');
+          term.write('[vmterm] note: this VM executes 32-bit x86. 64-bit asm ASSEMBLES here (nasm -f elf64); running 64-bit output needs the cloud workflow — see docs/VM-TOOLCHAIN.md.\r\n');
         } else {
           const fdaResp = await fetch('vm/image/testos.img');
           if (!fdaResp.ok) throw new Error('could not fetch vm/image/testos.img (HTTP ' + fdaResp.status + ')');
@@ -188,10 +189,16 @@
           opts.fda = { buffer };
           opts.memory_size = 64 * 1024 * 1024;
           this._mode = 'floppy';
-          if (manifest && manifest.mode === 'linux9p') {
+          if (manifest && manifest.mode === 'linux9p-packed') {
+            // CI took the oversized-image path: assets exist only as a packed
+            // release archive this client can't stream. Say so loudly instead
+            // of silently demoing the floppy.
+            term.write('\r\n[vmterm] The Linux toolchain image was built PACKED (too large for direct hosting): ' + (manifest.notes || 'see vm/image/manifest.json') + '\r\n[vmterm] The full terminal is unavailable until the image is published unpacked. Falling back to the floppy test OS.\r\n');
+          } else if (manifest && manifest.mode === 'linux9p') {
             term.write('\r\n[vmterm] Linux image unavailable — falling back to floppy test OS.\r\n');
           } else {
             term.write('\r\n[vmterm] booting floppy test OS…\r\n');
+            term.write('[vmterm] (demo mode: the full Linux toolchain image has not been built yet — run the "build-vm-image" GitHub Action on this branch to enable bash/gcc/nasm.)\r\n');
           }
         }
 
