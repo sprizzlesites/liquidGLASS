@@ -48,7 +48,11 @@ let BASEFS = resolve(process.env.VM_BASEFS || 'vm/image/alpine-rootfs-flat/');
 if (!BASEFS.endsWith('/')) BASEFS += '/';
 const CMDLINE = process.env.VM_CMDLINE ||
   'rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose init=/sbin/init console=ttyS0 modules=virtio_pci tsc=reliable';
-const PROMPT_REGEX = new RegExp(process.env.VM_PROMPT_REGEX || 'localhost:~#');
+// Hostname-agnostic: the autologin root shell prompt is "<host>:~#", and the
+// serial getty can win the race against OpenRC's hostname service, so <host>
+// is often "(none)" rather than "localhost". Match the ":~#" (root) / ":~$"
+// (non-root) tail, which never appears in the boot log or MOTD.
+const PROMPT_REGEX = new RegExp(process.env.VM_PROMPT_REGEX || ':~[#$]\\s*$');
 const BOOT_TIMEOUT_MS = Number(process.env.VM_BOOT_TIMEOUT_MS || 180000);
 const CMD_TIMEOUT_MS = Number(process.env.VM_CMD_TIMEOUT_MS || 180000);
 const MEMORY_MB = Number(process.env.VM_MEMORY_MB || 512);
@@ -56,6 +60,17 @@ const MANIFEST_PATH = resolve(process.env.VM_MANIFEST || 'vm/image/manifest.json
 const FALLBACK_IMG = 'vm/image/testos.img'; // relative path recorded in the manifest, not resolved
 
 const DONE_MARKER = `SPRZ_SMOKE_DONE_${process.pid}`;
+// The serial TTY echoes the sent command line back BEFORE the shell runs it.
+// Any success token that appears literally in a command (echo A64=OK, the DONE
+// marker, ...) would therefore be seen in that echo before the command has run
+// — a false positive, and for the DONE marker it would end the session
+// prematurely (this is exactly what would have failed the run right after the
+// prompt-regex fix). Defeat it by splitting each token with an empty string
+// ('') *inside* the word: the shell concatenates it away at execution (real
+// output contains the contiguous token) but the echoed command text does not.
+// Search patterns below always look for the contiguous (executed) form.
+const splitTok = (t) => t.slice(0, 2) + "''" + t.slice(2);
+const DONE_EMIT = splitTok(DONE_MARKER);
 
 // --- preflight: assets must exist (they're built by CI, not this repo) ---
 for (const [name, p] of [
@@ -124,10 +139,10 @@ const COMMAND_SCRIPT = [
   'gcc --version',
   'nasm -v',
   "printf 'int main(){return 42;}' > t.c && gcc t.c -o t && ./t; echo RC=$?",
-  "printf 'bits 64\\nmov rax,60\\nxor rdi,rdi\\nsyscall' > t64.asm && nasm -f elf64 t64.asm -o t64.o && echo A64=OK",
-  'ld -m elf_x86_64 --version >/dev/null 2>&1 && echo LD64=YES || echo LD64=NO',
-  'cd /root/skel/vst && make && echo VST2=OK',
-  `echo ${DONE_MARKER}`,
+  "printf 'bits 64\\nmov rax,60\\nxor rdi,rdi\\nsyscall' > t64.asm && nasm -f elf64 t64.asm -o t64.o && echo A64''=OK",
+  "ld -m elf_x86_64 --version >/dev/null 2>&1 && echo LD64''=YES || echo LD64''=NO",
+  "cd /root/skel/vst && make && echo VST2''=OK",
+  `echo ${DONE_EMIT}`,
 ].join('; ');
 
 emulator.add_listener('serial0-output-byte', (byte) => {
