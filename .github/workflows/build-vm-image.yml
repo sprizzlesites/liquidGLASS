@@ -68,7 +68,11 @@ jobs:
         id: sizecheck
         run: |
           set -euo pipefail
-          MAXFILE=$(find vm/image -type f -printf '%s\n' | sort -rn | head -n1)
+          # Single-pass awk max instead of `sort -rn | head -n1`: head closes
+          # the pipe after one line, sort dies with EPIPE, and under `set -o
+          # pipefail` this bare assignment then aborts the step (exit 2). awk
+          # consumes all input, so nothing closes the pipe early.
+          MAXFILE=$(find vm/image -type f -printf '%s\n' | awk 'BEGIN{m=0}{if($1+0>m)m=$1+0}END{print m}')
           TOTAL=$(du -sb vm/image | cut -f1)
           FILECOUNT=$(find vm/image -type f | wc -l)
           echo "largest single file: $MAXFILE bytes"

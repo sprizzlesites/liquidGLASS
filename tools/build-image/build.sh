@@ -152,6 +152,6 @@ echo
 echo "== size report =="
 du -sh "$OUT_DIR"/bzimage.bin "$OUT_DIR"/initramfs.img "$OUT_DIR"/alpine-fs.json "$OUT_DIR"/alpine-rootfs-flat 2>/dev/null || true
 echo "flat dir file count: $(find "$OUT_DIR/alpine-rootfs-flat" -type f | wc -l)"
-echo "largest single file: $(find "$OUT_DIR" -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -n1)"
+echo "largest single file: $(find "$OUT_DIR" -type f -printf '%s %p\n' 2>/dev/null | awk 'NR==1||$1+0>m{m=$1+0;l=$0}END{if(NR)print l}')"
 echo
 echo "Build complete. Next: node tests/vm/boot-linux-smoke.mjs"
