@@ -12,8 +12,15 @@ on:
   workflow_dispatch: {}
   push:
     branches: [fullterminal]
+    # Any change to a build input should rebuild+re-verify the image. This
+    # includes the smoke test (tests/vm/boot-linux-smoke.mjs) and the baked-in
+    # project skeleton (tools/skel/**), not just the Docker build itself —
+    # otherwise a fix to the harness never re-runs and you're stuck "retrying"
+    # the old commit forever.
     paths:
       - 'tools/build-image/**'
+      - 'tools/skel/**'
+      - 'tests/vm/boot-linux-smoke.mjs'
       - '.github/workflows/build-vm-image.yml'
 
 permissions:
