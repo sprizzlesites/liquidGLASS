@@ -1,0 +1,5 @@
+#!/bin/sh
+# Guest-side convenience: touch the marker file the host IDE polls for
+# to know it should pull /root/project back into S.files (see
+# docs/ORCHESTRATION.md section 2, "Project sync").
+touch /root/project/.sprz-sync

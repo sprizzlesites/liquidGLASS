@@ -1,0 +1,16 @@
+{
+  "mode": "linux9p",
+  "kernel": "vm/image/bzimage.bin",
+  "initrd": "vm/image/initramfs.img",
+  "cmdline": "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose init=/sbin/init console=ttyS0 modules=virtio_pci tsc=reliable",
+  "fsjson": "vm/image/alpine-fs.json",
+  "basefs": "vm/image/alpine-rootfs-flat/",
+  "bzimage_initrd_from_filesystem": true,
+  "caps": {
+    "ld64": true,
+    "vst2": true
+  },
+  "fallback": "vm/image/testos.img",
+  "generatedBy": "tests/vm/boot-linux-smoke.mjs",
+  "generatedAt": "2026-07-13T07:59:58.062Z"
+}
